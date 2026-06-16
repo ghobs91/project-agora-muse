@@ -11,8 +11,6 @@ import { persist } from 'zustand/middleware';
 import type { FeedGenerator } from '@/types';
 import { useAuthStore } from './auth-store';
 import * as feeds from '@/lib/atproto/feeds';
-import * as llm from '@/lib/llm/topic-matcher';
-import { useTopicStore } from './topic-store';
 
 interface TopicFeedStore {
   /** topicId -> array of associated feed generators */
@@ -23,6 +21,7 @@ interface TopicFeedStore {
 
   getFeedsForTopic: (topicId: string) => FeedGenerator[];
   getAllFeeds: () => FeedGenerator[];
+  setFeedsForTopic: (topicId: string, feeds: FeedGenerator[]) => void;
   discoverFeedsForTopic: (topicId: string) => Promise<void>;
   clearFeedsForTopic: (topicId: string) => void;
 }
@@ -42,45 +41,56 @@ export const useTopicFeedStore = create<TopicFeedStore>()(
         return Object.values(get().feedsByTopic).flat();
       },
 
+      setFeedsForTopic: (topicId, feeds) => {
+        const existing = get().feedsByTopic[topicId];
+        if (existing && existing.length > 0) return;
+        set({
+          feedsByTopic: {
+            ...get().feedsByTopic,
+            [topicId]: feeds,
+          },
+        });
+      },
+
       discoverFeedsForTopic: async (topicId) => {
         const { agent } = useAuthStore.getState();
         if (!agent) return;
 
+        const { useTopicStore } = await import('./topic-store');
         const topic = useTopicStore.getState().topics.find((t) => t.id === topicId);
         if (!topic) return;
 
-        // Already discovered?
-        const existing = get().feedsByTopic[topicId];
-        if (existing && existing.length > 0) return;
+        let allFeeds = get().feedsByTopic[topicId];
 
-        set({ discovering: true, error: null });
-
-        try {
-          // Step 1: Search for feed generators matching the topic name
-          const allFeeds = await feeds.searchFeedGenerators(agent, topic.name, 10);
-
-          if (allFeeds.length === 0) {
-            // No feeds found — that's OK, we'll keep trying
-            set({ discovering: false });
+        // Fetch feeds if we haven't yet
+        if (!allFeeds || allFeeds.length === 0) {
+          set({ discovering: true, error: null });
+          try {
+            allFeeds = await feeds.searchFeedGenerators(agent, topic.name, 3);
+            if (allFeeds.length === 0) {
+              set({ discovering: false });
+              return;
+            }
+            set({
+              feedsByTopic: {
+                ...get().feedsByTopic,
+                [topicId]: allFeeds,
+              },
+              discovering: false,
+            });
+          } catch (err) {
+            set({
+              discovering: false,
+              error: err instanceof Error ? err.message : 'Failed to discover feeds',
+            });
             return;
           }
+        }
 
-          // Step 2: Use LLM to determine which feeds are relevant
-          const matched = await llm.matchFeedsToTopic(allFeeds, topic);
-
-          // Step 3: Store the associations
-          set({
-            feedsByTopic: {
-              ...get().feedsByTopic,
-              [topicId]: matched,
-            },
-            discovering: false,
-          });
-        } catch (err) {
-          set({
-            discovering: false,
-            error: err instanceof Error ? err.message : 'Failed to discover feeds',
-          });
+        // Update topic icon from the top feed's avatar
+        const avatar = allFeeds[0]?.avatar;
+        if (avatar) {
+          useTopicStore.getState().setTopicIcon(topicId, avatar);
         }
       },
 

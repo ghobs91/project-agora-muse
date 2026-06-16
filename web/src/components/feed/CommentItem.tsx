@@ -9,6 +9,7 @@ interface CommentItemProps {
   onUpvote: (comment: ThreadComment) => Promise<void>;
   rootUri: string;
   rootCid: string;
+  upvotedUris?: Set<string>;
 }
 
 export default function CommentItem({
@@ -17,6 +18,7 @@ export default function CommentItem({
   onUpvote,
   rootUri,
   rootCid,
+  upvotedUris,
 }: CommentItemProps) {
   const [replying, setReplying] = useState(false);
   const [replyText, setReplyText] = useState('');
@@ -24,6 +26,8 @@ export default function CommentItem({
   const [collapsed, setCollapsed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  const isUpvoted = upvotedUris?.has(comment.uri) ?? false;
 
   const timeAgo = formatTimeAgo(comment.indexedAt);
   const isDeep = comment.depth >= 5;
@@ -87,7 +91,7 @@ export default function CommentItem({
             {comment.author.handle}
           </span>
           <span className="text-gray-600">•</span>
-          <span className="text-xs text-gray-500">{timeAgo}</span>
+          <span className="text-xs text-gray-500" suppressHydrationWarning>{timeAgo}</span>
         </div>
 
         {/* Comment body */}
@@ -101,9 +105,14 @@ export default function CommentItem({
             <div className="flex items-center gap-1.5 ml-7">
               <button
                 onClick={() => onUpvote(comment)}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-lighter text-gray-500 hover:text-sky-400 transition-colors text-xs font-medium"
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors text-xs font-medium ${
+                  isUpvoted
+                    ? 'bg-sky-500/20 text-sky-400'
+                    : 'bg-surface-lighter text-gray-500 hover:text-sky-400'
+                }`}
+                title={isUpvoted ? 'Upvoted' : 'Upvote'}
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <svg className="w-3 h-3" fill={isUpvoted ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
                 </svg>
                 {comment.likeCount}
@@ -177,6 +186,7 @@ export default function CommentItem({
                     onUpvote={onUpvote}
                     rootUri={rootUri}
                     rootCid={rootCid}
+                    upvotedUris={upvotedUris}
                   />
                 ))}
               </div>

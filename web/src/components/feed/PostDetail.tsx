@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import type { PostThread, ThreadComment } from '@/types';
 import TopicBadge from '@/components/topics/TopicBadge';
+import HashtagBadge from '@/components/feed/HashtagBadge';
 import CommentItem from '@/components/feed/CommentItem';
+import { extractHashtags } from '@/lib/utils/text';
 
 interface PostDetailProps {
   thread: PostThread;
@@ -12,6 +14,7 @@ interface PostDetailProps {
   onDownvote: () => Promise<void>;
   onReply: (text: string, parentUri: string, parentCid: string) => Promise<void>;
   onCommentUpvote: (comment: ThreadComment) => Promise<void>;
+  upvotedUris?: Set<string>;
 }
 
 export default function PostDetail({
@@ -20,6 +23,7 @@ export default function PostDetail({
   onDownvote,
   onReply,
   onCommentUpvote,
+  upvotedUris,
 }: PostDetailProps) {
   const { post, replies } = thread;
   const [replyText, setReplyText] = useState('');
@@ -27,6 +31,10 @@ export default function PostDetail({
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [replySuccess, setReplySuccess] = useState(false);
+
+  const { cleanText, hashtags } = useMemo(() => extractHashtags(post.text), [post.text]);
+
+  const isUpvoted = upvotedUris?.has(post.uri) ?? false;
 
   const timeAgo = formatTimeAgo(post.indexedAt);
   const primaryTopic = post.matchedTopics[0];
@@ -89,14 +97,14 @@ export default function PostDetail({
             <div className="flex items-center gap-1.5 text-xs text-gray-500">
               <span className="truncate">{post.author.handle}</span>
               <span className="text-gray-600">•</span>
-              <span>{timeAgo}</span>
+              <span suppressHydrationWarning>{timeAgo}</span>
             </div>
           </div>
         </div>
 
         {/* Post text */}
         <p className="text-gray-100 text-base leading-relaxed whitespace-pre-wrap mb-3">
-          {post.text}
+          {cleanText}
         </p>
 
         {/* External embed */}
@@ -152,13 +160,27 @@ export default function PostDetail({
           </div>
         )}
 
+        {/* Extracted hashtags */}
+        {hashtags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-4">
+            {hashtags.map((tag) => (
+              <HashtagBadge key={tag} tag={tag} />
+            ))}
+          </div>
+        )}
+
         {/* Action bar */}
         <div className="flex items-center gap-2 pt-3 divider">
           <button
             onClick={onUpvote}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-lighter text-gray-400 hover:bg-surface-light hover:text-sky-400 transition-colors text-sm font-medium"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors text-sm font-medium ${
+              isUpvoted
+                ? 'bg-sky-500/20 text-sky-400'
+                : 'bg-surface-lighter text-gray-400 hover:bg-surface-light hover:text-sky-400'
+            }`}
+            title={isUpvoted ? 'Upvoted' : 'Upvote'}
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg className="w-4 h-4" fill={isUpvoted ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
             </svg>
             {post.likeCount}
@@ -265,6 +287,7 @@ export default function PostDetail({
                 onUpvote={onCommentUpvote}
                 rootUri={post.uri}
                 rootCid={post.cid}
+                upvotedUris={upvotedUris}
               />
             ))}
           </div>
