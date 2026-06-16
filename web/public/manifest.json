@@ -1,0 +1,74 @@
+{
+  "name": "Agora Muse — Reddit over Bluesky",
+  "short_name": "Agora Muse",
+  "description": "Follow topics, not communities. Intelligent aggregation of Bluesky content powered by in-browser AI.",
+  "start_url": "/?utm_source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1120",
+  "theme_color": "#0284c7",
+  "categories": ["social", "news", "productivity"],
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "display_override": ["standalone", "minimal-ui"],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "shortcuts": [
+    {
+      "name": "Explore Topics",
+      "short_name": "Explore",
+      "description": "Browse topics and trending discussions",
+      "url": "/topics?utm_source=pwa-shortcut"
+    },
+    {
+      "name": "Create Post",
+      "short_name": "Create",
+      "description": "Write a new post",
+      "url": "/post?utm_source=pwa-shortcut"
+    },
+    {
+      "name": "Moderation",
+      "short_name": "Moderation",
+      "description": "Manage moderation rules and LLM settings",
+      "url": "/moderation?utm_source=pwa-shortcut"
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}
