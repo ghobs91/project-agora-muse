@@ -15,6 +15,8 @@ export interface EnrichedPost {
   embed?: PostEmbed;
   // Labels applied by Bluesky labelers
   labels: PostLabel[];
+  // Whether this post is pinned by a feed generator
+  isPinned?: boolean;
   // Topics matched by our LLM
   matchedTopics: TopicMatch[];
 }
@@ -53,6 +55,8 @@ export interface Topic {
   followerCount: number;
   // Whether this is a user-created custom topic
   isCustom?: boolean;
+  // Avatar URL from the top matching Bluesky feed
+  iconUrl?: string;
 }
 
 /** How well a post matches a topic (0-1) */
@@ -75,6 +79,18 @@ export interface FeedGenerator {
     displayName?: string;
     avatar?: string;
   };
+}
+
+/** A group of related feeds compiled into a "popular topic" */
+export interface PopularTopicGroup {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  seedTerms: string[];
+  feeds: FeedGenerator[];
+  totalLikeCount: number;
 }
 
 // ─── User Preferences (stored on PDS) ────────────────────────────────
@@ -129,6 +145,13 @@ export interface LLMState {
   status: LLMStatus;
   progress: number;
   error?: string;
+}
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  size: string;
+  backend: 'embeddings' | 'webllm';
 }
 
 // ─── Thread / Comments ──────────────────────────────────────────────

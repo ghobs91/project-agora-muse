@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
 import { useLLMStore } from '@/lib/store/llm-store';
 import type { LLMStatus } from '@/types';
 
@@ -14,19 +15,69 @@ const STATUS_CONFIG: Record<
 };
 
 export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
-  const { status, progress, loadModel } = useLLMStore();
+  const { status, progress, loadModel, selectedModel, setModel, availableModels } = useLLMStore();
   const config = STATUS_CONFIG[status];
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selectedModelInfo = availableModels.find((m) => m.id === selectedModel);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   if (compact) {
     return (
-      <button
-        onClick={status === 'unloaded' || status === 'error' ? loadModel : undefined}
-        className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
-        title={`${config.label}${status === 'loading' ? ` (${progress}%)` : ''} — click to ${status === 'ready' ? 'view settings' : config.action.toLowerCase()}`}
-      >
-        <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-        {status === 'loading' ? `${progress}%` : config.label.replace('LLM ', '')}
-      </button>
+      <div className="relative" ref={containerRef}>
+        <button
+          onClick={() => {
+            if (status === 'unloaded' || status === 'error') {
+              loadModel();
+            } else {
+              setDropdownOpen(!dropdownOpen);
+            }
+          }}
+          className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          title={`${config.label}${status === 'loading' ? ` (${progress}%)` : ''} (${selectedModelInfo?.name}) — ${status === 'ready' ? 'click to change model' : `click to ${config.action.toLowerCase()}`}`}
+        >
+          <span className={`w-2 h-2 rounded-full ${config.dot}`} />
+          {status === 'loading' ? `${progress}%` : config.label.replace('LLM ', '')}
+        </button>
+
+        {dropdownOpen && (
+          <div className="absolute top-full right-0 mt-2 w-64 card z-50 shadow-xl border border-dark-700/50">
+            <div className="p-3 space-y-2">
+              <h4 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Select Model</h4>
+              <div className="space-y-1">
+                {availableModels.map((model) => (
+                  <button
+                    key={model.id}
+                    onClick={() => {
+                      setModel(model.id);
+                      setDropdownOpen(false);
+                    }}
+                    className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                      selectedModel === model.id
+                        ? 'bg-sky-600/20 text-sky-400'
+                        : 'text-gray-400 hover:bg-surface-lighter'
+                    }`}
+                  >
+                    <div className="font-medium">{model.name}</div>
+                    <div className="text-gray-600">{model.size} · {model.backend === 'webllm' ? 'WebLLM' : 'Embeddings'}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -71,8 +122,8 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
 
       {status === 'ready' && (
         <div className="text-xs text-gray-500 space-y-1">
-          <p>Model: Xenova/all-MiniLM-L6-v2 (~23MB)</p>
-          <p>Backend: ONNX Runtime WASM</p>
+          <p>Model: {selectedModel} ({selectedModelInfo?.size})</p>
+          <p>Backend: {selectedModelInfo?.backend === 'webllm' ? 'WebLLM (WebGPU)' : 'ONNX Runtime WASM'}</p>
           <p>Used for topic matching and semantic moderation.</p>
         </div>
       )}
@@ -86,8 +137,30 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
 
       {status === 'unloaded' && (
         <div className="text-xs text-gray-500 space-y-1">
-          <p>The model loads on demand (~23MB download).</p>
+          <p>The model loads on demand ({selectedModelInfo?.size} download).</p>
           <p>Keyword matching is used until the model is ready.</p>
+        </div>
+      )}
+
+      {status === 'ready' && (
+        <div className="space-y-2">
+          <h5 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Select Model</h5>
+          <div className="space-y-1">
+            {availableModels.map((model) => (
+              <button
+                key={model.id}
+                onClick={() => setModel(model.id)}
+                className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                  selectedModel === model.id
+                    ? 'bg-sky-600/20 text-sky-400'
+                    : 'text-gray-400 hover:bg-surface-lighter'
+                }`}
+              >
+                <div className="font-medium">{model.name}</div>
+                <div className="text-gray-600">{model.size} · {model.backend === 'webllm' ? 'WebLLM' : 'Embeddings'}</div>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
