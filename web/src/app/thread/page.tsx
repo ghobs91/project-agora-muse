@@ -17,10 +17,13 @@ function ThreadContent() {
   const [thread, setThread] = useState<PostThread | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [upvotedUris, setUpvotedUris] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    restoreSession();
-  }, [restoreSession]);
+    if (!isAuthenticated) {
+      restoreSession();
+    }
+  }, [isAuthenticated, restoreSession]);
 
   useEffect(() => {
     if (!isAuthenticated || !agent || !postUri) return;
@@ -42,9 +45,11 @@ function ThreadContent() {
   }, [isAuthenticated, agent, postUri]);
 
   const handleUpvote = async () => {
-    if (!agent || !thread) return;
+    if (!agent) { console.warn('Cannot upvote on thread page: no agent'); return; }
+    if (!thread) return;
     try {
       await feeds.likePost(agent, thread.post.uri, thread.post.cid);
+      setUpvotedUris((prev) => new Set(prev).add(thread.post.uri));
       setThread((prev) =>
         prev
           ? {
@@ -59,7 +64,8 @@ function ThreadContent() {
   };
 
   const handleDownvote = async () => {
-    if (!agent || !thread) return;
+    if (!agent) { console.warn('Cannot downvote on thread page: no agent'); return; }
+    if (!thread) return;
     try {
       await records.hidePost(agent, thread.post.uri, 'downvote');
       await feeds.muteUser(agent, thread.post.author.did);
@@ -90,6 +96,7 @@ function ThreadContent() {
     if (!agent) return;
     try {
       await feeds.likePost(agent, comment.uri, comment.cid);
+      setUpvotedUris((prev) => new Set(prev).add(comment.uri));
       setThread((prev) => {
         if (!prev) return prev;
         return {
@@ -169,6 +176,7 @@ function ThreadContent() {
             onDownvote={handleDownvote}
             onReply={handleReply}
             onCommentUpvote={handleCommentUpvote}
+            upvotedUris={upvotedUris}
           />
         ) : null}
       </main>

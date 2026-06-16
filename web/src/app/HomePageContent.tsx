@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
+import { Icon } from '@iconify/react';
+import type { ReactNode } from 'react';
 import { useAuthStore } from '@/lib/store/auth-store';
-import { useLLMStore } from '@/lib/store/llm-store';
 import { useTopicStore } from '@/lib/store/topic-store';
 import * as auth from '@/lib/atproto/auth';
 import Header from '@/components/layout/Header';
@@ -12,26 +13,25 @@ import FeedList from '@/components/feed/FeedList';
 
 export default function HomePageContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { isAuthenticated, restoreSession, setAgent, loading: authLoading } = useAuthStore();
-  const { loadModel } = useLLMStore();
-  const { loadFollowedTopics } = useTopicStore();
+  const { loadFollowedTopics, loadPopularTopics, hydrateCustomTopics } = useTopicStore();
 
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [processingCallback, setProcessingCallback] = useState(false);
   const [callbackError, setCallbackError] = useState<string | null>(null);
 
   const didRestore = useRef(false);
 
-  const code =
-    searchParams.get('code') ??
-    (typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.hash.slice(1)).get('code')
-      : null);
-  const state =
-    searchParams.get('state') ??
-    (typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.hash.slice(1)).get('state')
-      : null);
+  // Read OAuth callback params from URL (search + hash).
+  // Uses typeof window guard for SSR compatibility.
+  const getParam = (key: string): string | null => {
+    if (typeof window === 'undefined') return null;
+    const search = new URLSearchParams(window.location.search);
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    return search.get(key) ?? hash.get(key);
+  };
+  const code = getParam('code');
+  const state = getParam('state');
   const isCallback = !!(code && state);
 
   const handleOAuthCallback = useCallback(async () => {
@@ -62,19 +62,23 @@ export default function HomePageContent() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      loadModel();
+      hydrateCustomTopics();
       loadFollowedTopics();
+      loadPopularTopics();
     }
-  }, [isAuthenticated, loadModel, loadFollowedTopics]);
+  }, [isAuthenticated, hydrateCustomTopics, loadFollowedTopics, loadPopularTopics]);
 
   // Authenticated — main feed
   if (isAuthenticated) {
     return (
       <div className="min-h-screen">
-        <Header />
+        <Header onToggleSidebar={() => setMobileSidebarOpen((v) => !v)} />
         <div className="max-w-[1400px] mx-auto px-4 py-4 flex gap-4">
-          <Sidebar />
-          <main className="flex-1 min-w-0">
+          <Sidebar
+            drawerOpen={mobileSidebarOpen}
+            onDrawerClose={() => setMobileSidebarOpen(false)}
+          />
+          <main className="flex-1 min-w-0 max-w-3xl">
             <FeedList />
           </main>
         </div>
@@ -127,17 +131,17 @@ export default function HomePageContent() {
             <FeatureCard
               title="Follow Topics"
               description="AI matches Bluesky posts to your interests"
-              icon=""
+              icon={<Icon icon="lucide:target" className="w-8 h-8" />}
             />
             <FeatureCard
               title="Your Rules"
               description="Per-user moderation with semantic filters"
-              icon="🛡️"
+              icon={<Icon icon="lucide:shield" className="w-8 h-8" />}
             />
             <FeatureCard
               title="Post Freely"
               description="Auto-suggested topic tags for your posts"
-              icon="️"
+              icon={<Icon icon="lucide:message-square" className="w-8 h-8" />}
             />
           </div>
 
@@ -171,11 +175,11 @@ function FeatureCard({
 }: {
   title: string;
   description: string;
-  icon: string;
+  icon: ReactNode;
 }) {
   return (
     <div className="card text-center">
-      <div className="text-2xl mb-2">{icon}</div>
+      <div className="text-sky-400 mb-2 flex justify-center">{icon}</div>
       <h3 className="text-sm font-semibold text-gray-200 mb-1">{title}</h3>
       <p className="text-xs text-gray-500">{description}</p>
     </div>

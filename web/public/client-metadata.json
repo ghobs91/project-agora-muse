@@ -1,11 +1,18 @@
 {
-  "client_id": "http://localhost:3000/client-metadata.json",
+  "client_id": "https://agora-muse.netlify.app/client-metadata.json",
   "client_name": "Agora Muse",
-  "client_uri": "http://localhost:3000",
-  "redirect_uris": ["http://localhost:3000/oauth/callback"],
-  "scope": "atproto",
-  "grant_types": ["authorization_code", "refresh_token"],
-  "response_types": ["code"],
+  "client_uri": "https://agora-muse.netlify.app",
+  "redirect_uris": [
+    "https://agora-muse.netlify.app/oauth/callback"
+  ],
+  "scope": "atproto transition:generic",
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
   "token_endpoint_auth_method": "none",
   "application_type": "web",
   "dpop_bound_access_tokens": true

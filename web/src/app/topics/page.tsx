@@ -7,11 +7,13 @@ import { useTopicStore } from '@/lib/store/topic-store';
 import { useLLMStore } from '@/lib/store/llm-store';
 import Header from '@/components/layout/Header';
 import TopicFollowButton from '@/components/topics/TopicFollowButton';
+import TopicIcon from '@/components/topics/TopicIcon';
+import { isStaticTopicId } from '@/lib/data/topics';
 import type { Topic } from '@/types';
 
 export default function TopicsPage() {
   const { isAuthenticated, restoreSession, loading: authLoading } = useAuthStore();
-  const { topics, followedTopicIds, loadFollowedTopics, addCustomTopic, removeCustomTopic } = useTopicStore();
+  const { topics, followedTopicIds, loadFollowedTopics, loadPopularTopics, hydrateCustomTopics, addCustomTopic, removeCustomTopic } = useTopicStore();
   const { status: llmStatus } = useLLMStore();
 
   const [newName, setNewName] = useState('');
@@ -25,9 +27,11 @@ export default function TopicsPage() {
 
   useEffect(() => {
     if (isAuthenticated) {
+      hydrateCustomTopics();
       loadFollowedTopics();
+      loadPopularTopics();
     }
-  }, [isAuthenticated, loadFollowedTopics]);
+  }, [isAuthenticated, hydrateCustomTopics, loadFollowedTopics, loadPopularTopics]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,6 +75,7 @@ export default function TopicsPage() {
 
   const followed = topics.filter((t) => followedTopicIds.has(t.id));
   const available = topics.filter((t) => !followedTopicIds.has(t.id));
+  const popularTopics = topics.filter((t) => !t.isCustom);
 
   return (
     <div className="min-h-screen bg-surface-dark">
@@ -81,10 +86,19 @@ export default function TopicsPage() {
         {/* Custom topic creation */}
         <section className="card mb-8">
           <h2 className="section-label mb-3">Create Custom Topic</h2>
-          <p className="text-xs text-gray-500 mb-3">
-            Name a topic and we&apos;ll generate related terms
-            {llmStatus === 'ready' ? ' using AI' : ''} to find the best Bluesky feeds for it.
-          </p>
+          {llmStatus === 'loading' ? (
+            <p className="text-xs text-sky-400 mb-3 animate-pulse">
+              Loading AI engine for seed term generation...
+            </p>
+          ) : llmStatus === 'error' ? (
+            <p className="text-xs text-red-400 mb-3">
+              AI engine failed to load. Try refreshing.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 mb-3">
+              Name a topic and we&apos;ll use AI to find related terms and the best Bluesky feeds for it.
+            </p>
+          )}
           <form onSubmit={handleCreate} className="space-y-3">
             <div className="flex gap-3">
               <input
@@ -98,7 +112,7 @@ export default function TopicsPage() {
               />
               <button
                 type="submit"
-                disabled={creating || !newName.trim()}
+                disabled={creating || !newName.trim() || llmStatus !== 'ready'}
                 className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
               >
                 {creating ? 'Creating...' : 'Create'}
@@ -131,21 +145,40 @@ export default function TopicsPage() {
           </section>
         )}
 
-        <section>
-          <h2 className="section-label mb-3">
-            Available Topics ({available.length})
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {available.map((topic) => (
-              <TopicCard
-                key={topic.id}
-                topic={topic}
-                linkable
-                onRemove={topic.isCustom ? () => removeCustomTopic(topic.id) : undefined}
-              />
-            ))}
-          </div>
-        </section>
+        {popularTopics.length > 0 && (
+          <section className="mb-8">
+            <h2 className="section-label mb-3">
+              Popular Topics ({popularTopics.length})
+            </h2>
+            <p className="text-xs text-gray-500 mb-3">
+              Compiled from the most popular feeds on Bluesky — each topic
+              aggregates multiple curated feeds about the same subject.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {popularTopics.map((topic) => (
+                <TopicCard key={topic.id} topic={topic} linkable />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {available.filter((t) => t.isCustom).length > 0 && (
+          <section>
+            <h2 className="section-label mb-3">
+              Your Custom Topics ({available.filter((t) => t.isCustom).length})
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {available.filter((t) => t.isCustom).map((topic) => (
+                <TopicCard
+                  key={topic.id}
+                  topic={topic}
+                  linkable
+                  onRemove={() => removeCustomTopic(topic.id)}
+                />
+              ))}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );
@@ -161,20 +194,24 @@ function TopicCard({
   onRemove?: () => void;
 }) {
   const isCustom = topic.isCustom;
-  const href = isCustom
-    ? `/topics/custom?id=${encodeURIComponent(topic.id)}`
-    : `/topics/${topic.id}`;
+  const usesStaticRoute = !isCustom && isStaticTopicId(topic.id);
+  const href = usesStaticRoute
+    ? `/topics/${topic.id}`
+    : `/topics/custom?id=${encodeURIComponent(topic.id)}`;
 
   return (
     <div className="card flex items-start justify-between gap-3">
       <div className="min-w-0">
-        {linkable ? (
-          <Link href={href} className="font-medium text-sm text-gray-200 hover:text-sky-400 transition-colors">
-            {topic.name}
-          </Link>
-        ) : (
-          <h3 className="font-medium text-sm text-gray-200">{topic.name}</h3>
-        )}
+        <div className="flex items-center gap-1.5">
+          <TopicIcon topicId={topic.id} className="text-base shrink-0" seedTerms={topic.seedTerms} iconUrl={topic.iconUrl} />
+          {linkable ? (
+            <Link href={href} className="font-medium text-sm text-gray-200 hover:text-sky-400 transition-colors">
+              {topic.name}
+            </Link>
+          ) : (
+            <h3 className="font-medium text-sm text-gray-200">{topic.name}</h3>
+          )}
+        </div>
         <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
           {isCustom && <span className="text-sky-500/70 mr-1">Custom</span>}
           {topic.description}

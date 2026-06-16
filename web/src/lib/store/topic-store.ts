@@ -7,7 +7,7 @@ import type { Topic, TopicFollowRecord } from '@/types';
 import { useAuthStore } from './auth-store';
 import * as records from '@/lib/atproto/records';
 import { generateSeedTerms } from '@/lib/llm/topic-matcher';
-import { TOPIC_IDS } from '@/lib/data/topics';
+import { getPopularTopics } from '@/lib/data/popular-topics';
 
 const CUSTOM_TOPICS_KEY = 'agora-muse-custom-topics';
 
@@ -32,11 +32,11 @@ function saveCustomTopicsToStorage(topics: Topic[]): void {
 }
 
 function slugify(text: string): string {
-  return `custom-${text
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 40)}`;
+    .slice(0, 40);
 }
 
 // ─── Default Topics (seed catalog) ───────────────────────────────────
@@ -157,23 +157,74 @@ interface TopicStore {
   loading: boolean;
   error: string | null;
 
+  hydrateCustomTopics: () => void;
+  loadPopularTopics: () => Promise<void>;
   loadFollowedTopics: () => Promise<void>;
   followTopic: (topicId: string) => Promise<void>;
   unfollowTopic: (topicId: string) => Promise<void>;
   isFollowing: (topicId: string) => boolean;
   addCustomTopic: (name: string, description: string) => Promise<Topic>;
   removeCustomTopic: (topicId: string) => void;
+  setTopicIcon: (topicId: string, iconUrl: string) => void;
 }
 
 export const useTopicStore = create<TopicStore>((set, get) => ({
-  topics: [...DEFAULT_TOPICS, ...loadCustomTopicsFromStorage()],
+  topics: [...DEFAULT_TOPICS],
   followedTopicIds: new Set(),
-  loading: false,
+  loading: true,
   error: null,
+
+  hydrateCustomTopics: () => {
+    const customTopics = loadCustomTopicsFromStorage();
+    if (customTopics.length === 0) return;
+    const currentTopics = get().topics;
+    const newTopics = customTopics.filter(
+      (ct) => !currentTopics.some((t) => t.id === ct.id),
+    );
+    if (newTopics.length > 0) {
+      set({ topics: [...currentTopics, ...newTopics] });
+    }
+  },
+
+  loadPopularTopics: async () => {
+    try {
+      const groups = await getPopularTopics();
+      if (groups.length === 0) return; // keep current topics (defaults or previous)
+
+      // Convert PopularTopicGroups to Topic objects
+      const popularTopics: Topic[] = groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        description: g.description,
+        seedTerms: g.seedTerms,
+        followerCount: g.totalLikeCount,
+        iconUrl: g.feeds[0]?.avatar,
+      }));
+
+      // Store feed associations in topic-feed-store for each group
+      const { useTopicFeedStore } = await import('./topic-feed-store');
+      for (const group of groups) {
+        useTopicFeedStore.getState().setFeedsForTopic(group.id, group.feeds);
+      }
+
+      // Popular topics fully replace built-in defaults, keep custom topics
+      const currentTopics = get().topics;
+      const customTopics = currentTopics.filter((t) => t.isCustom);
+
+      set({
+        topics: [...popularTopics, ...customTopics],
+      });
+    } catch {
+      // Keep current topics on failure
+    }
+  },
 
   loadFollowedTopics: async () => {
     const { agent } = useAuthStore.getState();
-    if (!agent) return;
+    if (!agent) {
+      set({ loading: false });
+      return;
+    }
 
     set({ loading: true });
     try {
@@ -200,6 +251,8 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
       set({ followedTopicIds: newSet });
 
       // Trigger feed discovery for this topic (fire-and-forget)
+      // For popular topics, feeds are already set by loadPopularTopics;
+      // this handles custom topics and any topics missing feeds
       import('./topic-feed-store').then(({ useTopicFeedStore }) => {
         useTopicFeedStore.getState().discoverFeedsForTopic(topicId);
       });
@@ -255,6 +308,13 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
       .concat(topic);
     saveCustomTopicsToStorage(customTopics);
 
+    // Auto-follow the newly created custom topic
+    try {
+      await get().followTopic(topic.id);
+    } catch {
+      // Silently ignore — topic was created, follow is optional
+    }
+
     return topic;
   },
 
@@ -273,6 +333,17 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
     set({ topics: remaining });
 
     const customTopics = remaining.filter((t) => t.isCustom);
+    saveCustomTopicsToStorage(customTopics);
+  },
+
+  setTopicIcon: (topicId: string, iconUrl: string) => {
+    set({
+      topics: get().topics.map((t) =>
+        t.id === topicId ? { ...t, iconUrl } : t,
+      ),
+    });
+    // Persist to localStorage if this is a custom topic
+    const customTopics = get().topics.filter((t) => t.isCustom);
     saveCustomTopicsToStorage(customTopics);
   },
 }));

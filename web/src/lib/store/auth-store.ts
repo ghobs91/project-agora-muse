@@ -14,13 +14,13 @@ interface AuthStore {
   loading: boolean;
   error: string | null;
 
-  login: (handle: string) => Promise<void>;
+  login: () => Promise<void>;
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
   setAgent: (agent: Agent, did: string, handle: string) => void;
 }
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   isAuthenticated: false,
   did: null,
   handle: null,
@@ -28,10 +28,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
   loading: false,
   error: null,
 
-  login: async (handle) => {
+  login: async () => {
     set({ loading: true, error: null });
     try {
-      await auth.login(handle);
+      await auth.login();
       // The OAuth flow will redirect the page, so we don't set state here
     } catch (err) {
       set({
@@ -57,6 +57,15 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   restoreSession: async () => {
+    // If already authenticated, skip re-restore to avoid redundant
+    // network requests and potential state races.  Subsequent calls
+    // to restoreSession (e.g. from pages that mount after the user
+    // is already signed in) should be safely idempotent.
+    const current = get();
+    if (current.isAuthenticated && current.agent) {
+      return;
+    }
+
     set({ loading: true });
     try {
       const session = await auth.restoreSession();

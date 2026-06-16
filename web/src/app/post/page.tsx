@@ -4,15 +4,20 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth-store';
 import type { Topic } from '@/types';
+import { TOPIC_HASHTAGS } from '@/lib/data/topics';
 import Header from '@/components/layout/Header';
 import TopicSuggestions from '@/components/topics/TopicSuggestions';
+
+function getHashtags(topicId: string): string[] {
+  return TOPIC_HASHTAGS[topicId] || [topicId];
+}
 
 export default function PostPage() {
   const router = useRouter();
   const { isAuthenticated, agent, restoreSession, loading: authLoading } = useAuthStore();
 
   const [text, setText] = useState('');
-  const [selectedTopics, setSelectedTopics] = useState<Topic[]>([]);
+  const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,13 +26,11 @@ export default function PostPage() {
   }, [restoreSession]);
 
   const handleTopicSelect = (topic: Topic) => {
-    if (selectedTopics.length >= 3) return;
-    if (selectedTopics.find((t) => t.id === topic.id)) return;
-    setSelectedTopics([...selectedTopics, topic]);
+    setSelectedTopic(topic);
   };
 
-  const handleRemoveTopic = (topicId: string) => {
-    setSelectedTopics(selectedTopics.filter((t) => t.id !== topicId));
+  const handleRemoveTopic = () => {
+    setSelectedTopic(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -39,8 +42,10 @@ export default function PostPage() {
 
     try {
       let postText = text.trim();
-      if (selectedTopics.length > 0) {
-        const tags = selectedTopics.map((t) => `#${t.name.replace(/\s+/g, '')}`).join(' ');
+      if (selectedTopic) {
+        const tags = getHashtags(selectedTopic.id)
+          .map((t) => `#${t}`)
+          .join(' ');
         postText = `${postText}\n\n${tags}`;
       }
 
@@ -98,24 +103,33 @@ export default function PostPage() {
             )}
           </div>
 
-          {selectedTopics.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-4">
-              {selectedTopics.map((topic) => (
+          {selectedTopic && (
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-2">
                 <button
-                  key={topic.id}
-                  onClick={() => handleRemoveTopic(topic.id)}
+                  onClick={handleRemoveTopic}
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-sky-600/20 text-sky-400 hover:bg-red-500/20 hover:text-red-400 transition-colors"
                 >
-                  {topic.name} ×
+                  {selectedTopic.name} ×
                 </button>
-              ))}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {getHashtags(selectedTopic.id).map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-surface-lighter text-gray-400"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 
           <TopicSuggestions
             content={text}
             onSelect={handleTopicSelect}
-            selectedTopics={selectedTopics}
+            selectedTopics={selectedTopic ? [selectedTopic] : []}
           />
 
           {error && (

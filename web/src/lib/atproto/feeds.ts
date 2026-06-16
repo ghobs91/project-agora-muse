@@ -33,6 +33,7 @@ type PostView = {
 
 type FeedItem = {
   post: PostView;
+  reason?: Record<string, unknown>;
 };
 
 type ThreadReplyItem = {
@@ -57,6 +58,13 @@ export async function fetchHomeFeed(
 ): Promise<{ posts: EnrichedPost[]; cursor?: string }> {
   const { limit = 30, cursor } = options;
 
+  // Guard: the Agent instance may not have getTimeline if the underlying
+  // XRPC client failed to initialize (e.g. stale OAuth session, missing
+  // fetchHandler). Return empty data so the feed store can degrade gracefully.
+  if (typeof (agent as any).getTimeline !== 'function') {
+    return { posts: [], cursor: undefined };
+  }
+
   const response = await agent.getTimeline({ limit, cursor });
   const data = response.data as { feed?: FeedItem[]; cursor?: string };
 
@@ -79,6 +87,10 @@ export async function fetchCustomFeed(
   options: FetchFeedOptions = {},
 ): Promise<{ posts: EnrichedPost[]; cursor?: string }> {
   const { limit = 30, cursor } = options;
+
+  if (typeof (agent as any).app?.bsky?.feed?.getFeed !== 'function') {
+    return { posts: [], cursor: undefined };
+  }
 
   const response = await agent.app.bsky.feed.getFeed({
     feed: feedUri,
@@ -107,6 +119,10 @@ export async function searchPosts(
 ): Promise<{ posts: EnrichedPost[]; cursor?: string }> {
   const { limit = 30, cursor } = options;
 
+  if (typeof (agent as any).app?.bsky?.feed?.searchPosts !== 'function') {
+    return { posts: [], cursor: undefined };
+  }
+
   const response = await agent.app.bsky.feed.searchPosts({
     q: query,
     limit,
@@ -130,6 +146,12 @@ export async function fetchPopularFeed(
   options: FetchFeedOptions = {},
 ): Promise<{ posts: EnrichedPost[]; cursor?: string }> {
   const { limit = 30, cursor } = options;
+
+  // Guard: the Agent's app.bsky.feed namespace may be missing if the XRPC
+  // client failed to initialize (e.g. stale OAuth session).
+  if (typeof (agent as any).app?.bsky?.feed?.getFeed !== 'function') {
+    return { posts: [], cursor: undefined };
+  }
 
   const response = await agent.app.bsky.feed.getFeed({
     feed: 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot',
@@ -249,14 +271,23 @@ export async function likePost(
   postUri: string,
   postCid: string,
 ): Promise<void> {
+  if (typeof (agent as any).like !== 'function') {
+    throw new Error('Agent does not support like');
+  }
   await agent.like(postUri, postCid);
 }
 
 export async function muteUser(agent: Agent, userDid: string): Promise<void> {
+  if (typeof (agent as any).app?.bsky?.graph?.muteActor !== 'function') {
+    throw new Error('Agent does not support muteActor');
+  }
   await agent.app.bsky.graph.muteActor({ actor: userDid });
 }
 
 export async function unmuteUser(agent: Agent, userDid: string): Promise<void> {
+  if (typeof (agent as any).app?.bsky?.graph?.unmuteActor !== 'function') {
+    throw new Error('Agent does not support unmuteActor');
+  }
   await agent.app.bsky.graph.unmuteActor({ actor: userDid });
 }
 
@@ -265,6 +296,10 @@ export async function getPostThread(
   postUri: string,
   depth: number = 6,
 ): Promise<PostThread> {
+  if (typeof (agent as any).app?.bsky?.feed?.getPostThread !== 'function') {
+    throw new Error('Agent does not support getPostThread');
+  }
+
   const response = await agent.app.bsky.feed.getPostThread({
     uri: postUri,
     depth,
@@ -291,6 +326,9 @@ export async function replyToPost(
   rootCid: string,
   text: string,
 ): Promise<void> {
+  if (typeof (agent as any).post !== 'function') {
+    throw new Error('Agent does not support post');
+  }
   await agent.post({
     text,
     reply: {
@@ -303,7 +341,11 @@ export async function replyToPost(
 // ─── Mapping Helpers ─────────────────────────────────────────────────
 
 function mapFeedItemToPost(item: FeedItem): EnrichedPost {
-  return mapFeedViewToPost(item.post);
+  const post = mapFeedViewToPost(item.post);
+  if (item.reason?.$type === 'app.bsky.feed.defs#reasonPin') {
+    post.isPinned = true;
+  }
+  return post;
 }
 
 function mapFeedViewToPost(view: PostView): EnrichedPost {

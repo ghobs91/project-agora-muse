@@ -5,28 +5,12 @@ import { useAuthStore } from '@/lib/store/auth-store';
 
 export default function LoginButton() {
   const { isAuthenticated, loading, login, logout, handle, error } = useAuthStore();
-  const [showForm, setShowForm] = useState(false);
-  const [inputHandle, setInputHandle] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = inputHandle.trim();
-    if (!trimmed) {
-      setLocalError('Please enter your Bluesky handle');
-      return;
-    }
-    const cleanHandle = trimmed
-      .replace(/^@/, '')
-      .replace(/^https?:\/\/bsky\.app\/profile\//, '')
-      .replace(/\/$/, '');
-    if (!cleanHandle.includes('.') && !cleanHandle.startsWith('did:')) {
-      setLocalError('Enter a valid Bluesky handle (e.g. user.bsky.social) or DID');
-      return;
-    }
+  const handleSignIn = async () => {
     setLocalError(null);
     try {
-      await login(cleanHandle);
+      await login();
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Login failed');
     }
@@ -54,46 +38,11 @@ export default function LoginButton() {
     );
   }
 
-  if (!showForm) {
-    return (
-      <button
-        onClick={() => setShowForm(true)}
-        className="btn-primary text-sm"
-      >
-        Sign in
-      </button>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-1">
-      <form onSubmit={handleSubmit} className="flex items-center gap-2">
-        <input
-          type="text"
-          value={inputHandle}
-          onChange={(e) => {
-            setInputHandle(e.target.value);
-            setLocalError(null);
-          }}
-          placeholder="handle.bsky.social"
-          className="input-dark text-sm w-48"
-          autoFocus
-        />
-        <button type="submit" className="btn-primary text-sm" disabled={loading}>
-          Sign in
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setShowForm(false);
-            setLocalError(null);
-            setInputHandle('');
-          }}
-          className="btn-ghost text-sm"
-        >
-          Cancel
-        </button>
-      </form>
+      <button onClick={handleSignIn} className="btn-primary text-sm">
+        Sign in
+      </button>
       {(localError || error) && (
         <p className="text-xs text-red-400">{localError || error}</p>
       )}

@@ -78,15 +78,17 @@ function isLoopbackOrigin(): boolean {
  */
 function buildClientMetadata(): Record<string, unknown> | undefined {
   // ── Production (non-loopback) ──────────────────────────────────
-  const clientId = process.env.NEXT_PUBLIC_OAUTH_CLIENT_ID;
-  if (clientId && !isLoopbackOrigin()) {
+  if (!isLoopbackOrigin()) {
+    const origin = window.location.origin;
+    const clientId = process.env.NEXT_PUBLIC_OAUTH_CLIENT_ID ||
+      `${origin}/client-metadata.json`;
     return {
       client_id: clientId,
       client_name: 'Agora Muse',
-      client_uri: process.env.NEXT_PUBLIC_OAUTH_CLIENT_URI || clientId,
+      client_uri: process.env.NEXT_PUBLIC_OAUTH_CLIENT_URI || origin,
       redirect_uris: [
         process.env.NEXT_PUBLIC_OAUTH_REDIRECT_URI ||
-        `${clientId.replace(/\/$/, '')}/oauth/callback`,
+        `${origin}/oauth/callback`,
       ],
       scope: 'atproto transition:generic',
       grant_types: ['authorization_code', 'refresh_token'],
@@ -224,12 +226,12 @@ async function createAgentFromOAuthSession(oauthSession: any): Promise<Agent> {
 
 // ─── Auth Actions ────────────────────────────────────────────────────
 
-export async function login(handle: string): Promise<void> {
-  if (!handle || !handle.trim()) {
-    throw new Error('A Bluesky handle is required to sign in.');
-  }
+export async function login(): Promise<void> {
   const client = await getClient();
-  await client.signInRedirect(handle.trim());
+  // Pass the Bluesky service URL instead of a handle. The AT Protocol OAuth
+  // client treats https:// URLs as service endpoints, which lets the Bluesky
+  // OAuth server present its own handle-entry page.
+  await client.signInRedirect('https://bsky.social');
 }
 
 export async function handleCallback(): Promise<{
