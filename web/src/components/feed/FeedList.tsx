@@ -5,11 +5,35 @@ import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { useFeedStore } from '@/lib/store/feed-store';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useTopicStore } from '@/lib/store/topic-store';
+import { useLLMStore } from '@/lib/store/llm-store';
+import * as feeds from '@/lib/atproto/feeds';
+import { isWebLLMLoaded, detectLanguageInBatch } from '@/lib/llm/web-llm';
 import PostCard from './PostCard';
 
-type LocationFilter = 'all' | 'subscribed' | 'local';
-type SortFilter = 'active' | 'hot' | 'top' | 'new';
-type ViewFilter = 'compact' | 'expanded';
+const LANGUAGES: { code: string; label: string }[] = [
+  { code: '', label: 'All languages' },
+  { code: 'en', label: 'English' },
+  { code: 'ja', label: '日本語' },
+  { code: 'es', label: 'Español' },
+  { code: 'pt', label: 'Português' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'fr', label: 'Français' },
+  { code: 'ko', label: '한국어' },
+  { code: 'zh', label: '中文' },
+  { code: 'ru', label: 'Русский' },
+];
+
+const LANG_PREF_KEY = 'agora-muse-lang';
+
+function getStoredLang(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem(LANG_PREF_KEY) ?? '';
+}
+
+function setStoredLang(code: string) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(LANG_PREF_KEY, code);
+}
 
 export default function FeedList() {
   const posts = useFeedStore((s) => s.posts);
@@ -24,24 +48,111 @@ export default function FeedList() {
   const upvote = useFeedStore((s) => s.upvote);
   const downvote = useFeedStore((s) => s.downvote);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const agent = useAuthStore((s) => s.agent);
   const parentRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<HTMLDivElement>(null);
   const didInitialLoad = useRef(false);
 
-  const [location, setLocation] = useState<LocationFilter>('all');
-  const [sort, setSort] = useState<SortFilter>('active');
-  const [view, setView] = useState<ViewFilter>('compact');
+  const [lang, setLang] = useState<string>(getStoredLang);
 
-  // Visible posts (filter out hidden, moderated, and posts without topic matches), sliced to current display count
+  // ─── LLM-powered language detection ────────────────────────────────
+  const llmStatus = useLLMStore((s) => s.status);
+  const [llmLangMismatchUris, setLlmLangMismatchUris] = useState<Set<string>>(new Set());
+  const [llmLangKick, setLlmLangKick] = useState(0);
+  const llmLangProcessingRef = useRef(false);
+  const lastLangRef = useRef<string>('');
+  const checkedUrisRef = useRef<Set<string>>(new Set());
+
+  // Keep a ref synced with current lang so async callbacks can read it
+  const langRef = useRef(lang);
+  useEffect(() => {
+    langRef.current = lang;
+  });
+
+  // Run LLM language detection in background when posts, language, or LLM readiness changes
+  useEffect(() => {
+    if (!lang || posts.length === 0) return;
+    // Only run when the WebLLM engine (Gemma/Llama) is loaded — the embedding
+    // model can't do language classification
+    if (!isWebLLMLoaded()) return;
+
+    // Always sync language changes (reset state) even if we can't process right now
+    if (lastLangRef.current !== lang) {
+      lastLangRef.current = lang;
+      checkedUrisRef.current = new Set();
+      setLlmLangMismatchUris(new Set());
+    }
+
+    // If another check is in flight, skip — llmLangKick will re-trigger us after
+    if (llmLangProcessingRef.current) return;
+
+    const postsToCheck = posts.filter((p) => !checkedUrisRef.current.has(p.uri));
+    if (postsToCheck.length === 0) return;
+
+    llmLangProcessingRef.current = true;
+    const requestedLang = lang;
+
+    detectLanguageInBatch(
+      postsToCheck.map((p) => p.text),
+      requestedLang,
+    )
+      .then((results) => {
+        // Discard if language changed while the LLM was processing
+        if (requestedLang !== langRef.current) return;
+
+        const mismatched = new Set<string>();
+        for (let i = 0; i < postsToCheck.length; i++) {
+          checkedUrisRef.current.add(postsToCheck[i].uri);
+          if (!results[i]) {
+            mismatched.add(postsToCheck[i].uri);
+          }
+        }
+
+        setLlmLangMismatchUris((prev) => {
+          const next = new Set(prev);
+          for (const p of postsToCheck) {
+            if (mismatched.has(p.uri)) {
+              next.add(p.uri);
+            } else {
+              next.delete(p.uri);
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        // Silently fail — the langs-field filter is still active
+      })
+      .finally(() => {
+        llmLangProcessingRef.current = false;
+        // Kick another effect run in case we skipped a language change
+        setLlmLangKick((k) => k + 1);
+      });
+  }, [lang, posts, llmStatus, llmLangKick]);
+
+  // Visible posts (filter out hidden, moderated, posts without topic matches, by language, and LLM-detected language mismatches), sliced to current display count
   const visiblePosts = useMemo(
     () =>
       posts
-        .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0)
+        .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0 && !llmLangMismatchUris.has(p.uri))
+        .filter((p) => {
+          if (!lang) return true;
+          return (p.langs?.length ?? 0) === 0 || p.langs!.includes(lang);
+        })
         .slice(0, displayCount),
-    [posts, hiddenPostUris, moderatedPostUris, displayCount],
+    [posts, hiddenPostUris, moderatedPostUris, displayCount, lang, llmLangMismatchUris],
   );
 
-  const allVisible = posts.filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0).length;
+  const allVisible = useMemo(
+    () =>
+      posts
+        .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0 && !llmLangMismatchUris.has(p.uri))
+        .filter((p) => {
+          if (!lang) return true;
+          return (p.langs?.length ?? 0) === 0 || p.langs!.includes(lang);
+        }).length,
+    [posts, hiddenPostUris, moderatedPostUris, lang, llmLangMismatchUris],
+  );
   const hasMore = displayCount < allVisible;
 
   // Virtualized list for window scroll
@@ -60,10 +171,23 @@ export default function FeedList() {
 
   const virtualizer = useWindowVirtualizer({
     count: visiblePosts.length,
-    estimateSize: () => 160,
+    estimateSize: (index) => {
+      const post = visiblePosts[index];
+      const hasImage = post.embed?.type === 'image' && (post.embed.images?.length ?? 0) > 0;
+      const hasExternal = post.embed?.type === 'external' && post.embed.external;
+      // Posts with media/embeds are taller; over-estimate to prevent overlap
+      // before the ResizeObserver measurement kicks in.
+      return hasImage || hasExternal ? 520 : 340;
+    },
     overscan: 5,
     scrollMargin: parentOffset,
   });
+
+  // Remeasure when count changes (e.g. after hiding/downvoting a post)
+  // so remaining items don't overlap with stale positions.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [visiblePosts.length, virtualizer]);
 
   // Initial load — reactive to auth + topic loading status via Zustand subscription
   useEffect(() => {
@@ -86,6 +210,20 @@ export default function FeedList() {
 
     return () => unsub();
   }, [isAuthenticated, loadFeed, loadHiddenPosts]);
+
+  // Sync language preference from Bluesky on first load
+  useEffect(() => {
+    if (!isAuthenticated || !agent) return;
+    const stored = getStoredLang();
+    if (stored) return; // user already set a preference
+
+    feeds.getUserPreferredLanguage(agent).then((prefLang) => {
+      if (prefLang) {
+        setLang(prefLang);
+        setStoredLang(prefLang);
+      }
+    }).catch(() => {});
+  }, [isAuthenticated, agent]);
 
   // Infinite scroll with IntersectionObserver
   const handleObserver = useCallback(
@@ -155,10 +293,10 @@ export default function FeedList() {
       <div className="card text-center py-12">
         {hasFollowedTopics ? (
           <>
-            <h3 className="text-lg font-semibold text-gray-300 mb-2">
+            <h3 className="text-lg font-semibold text-text-300 mb-2">
               No posts found
             </h3>
-            <p className="text-sm text-gray-500 mb-4">
+            <p className="text-sm text-text-500 mb-4">
               No posts from the Bluesky network matched your followed topics.
               Try following broader topics or refreshing.
             </p>
@@ -168,10 +306,10 @@ export default function FeedList() {
           </>
         ) : (
           <>
-            <h3 className="text-lg font-semibold text-gray-300 mb-2">
+            <h3 className="text-lg font-semibold text-text-300 mb-2">
               Discover topics
             </h3>
-            <p className="text-sm text-gray-500 mb-4">
+            <p className="text-sm text-text-500 mb-4">
               Follow topics to see relevant posts from across the Bluesky
               network — not just people you follow.
             </p>
@@ -188,66 +326,32 @@ export default function FeedList() {
 
   return (
     <div>
-      {/* Filter bar */}
+      {/* Language + header */}
       <div className="mb-4">
-        <h1 className="text-2xl font-bold text-gray-100 mb-3">Frontpage</h1>
-        <div className="flex items-center gap-3 flex-wrap">
-          {/* Location */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-text-100">Frontpage</h1>
           <div className="flex items-center gap-1.5">
-            <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            <span className="text-xs text-gray-500 font-medium">Location</span>
+            <span className="text-xs text-text-500 font-medium">Language</span>
             <select
-              value={location}
-              onChange={(e) => setLocation(e.target.value as LocationFilter)}
-              className="select-dark"
+              value={lang}
+              onChange={(e) => {
+                const code = e.target.value;
+                setLang(code);
+                setStoredLang(code);
+                window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+              }}
+              className="select-dark text-xs"
             >
-              <option value="all">All</option>
-              <option value="subscribed">Subscribed</option>
-              <option value="local">Local</option>
-            </select>
-          </div>
-
-          {/* Sort */}
-          <div className="flex items-center gap-1.5">
-            <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
-            </svg>
-            <span className="text-xs text-gray-500 font-medium">Sort</span>
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortFilter)}
-              className="select-dark"
-            >
-              <option value="active">Active</option>
-              <option value="hot">Hot</option>
-              <option value="top">Top</option>
-              <option value="new">New</option>
-            </select>
-          </div>
-
-          {/* View */}
-          <div className="flex items-center gap-1.5">
-            <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-            </svg>
-            <span className="text-xs text-gray-500 font-medium">View</span>
-            <select
-              value={view}
-              onChange={(e) => setView(e.target.value as ViewFilter)}
-              className="select-dark"
-            >
-              <option value="compact">Compact</option>
-              <option value="expanded">Expanded</option>
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>{l.label}</option>
+              ))}
             </select>
           </div>
         </div>
       </div>
 
-      {/* Virtualized post list */}
-      <div ref={parentRef}>
+      {/* Virtualized post list — keyed by lang to reset measurements on filter change */}
+      <div ref={parentRef} key={lang}>
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
@@ -270,7 +374,7 @@ export default function FeedList() {
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                <div className={view === 'compact' ? 'mb-2' : 'mb-4'}>
+                <div className="mb-2">
       <PostCard
         post={post}
         onUpvote={upvote}
@@ -295,7 +399,7 @@ export default function FeedList() {
 
       {/* End of feed */}
       {!hasMore && posts.length > 0 && (
-        <p className="text-center text-xs text-gray-600 py-4">
+        <p className="text-center text-xs text-text-600 py-4">
           — End of feed —
         </p>
       )}

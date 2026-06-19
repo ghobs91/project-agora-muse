@@ -14,7 +14,7 @@ import FeedList from '@/components/feed/FeedList';
 export default function HomePageContent() {
   const router = useRouter();
   const { isAuthenticated, restoreSession, setAgent, loading: authLoading } = useAuthStore();
-  const { loadFollowedTopics, loadPopularTopics, hydrateCustomTopics } = useTopicStore();
+  const { loadFollowedTopics, hydrateCustomTopics } = useTopicStore();
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [processingCallback, setProcessingCallback] = useState(false);
@@ -38,8 +38,8 @@ export default function HomePageContent() {
     setProcessingCallback(true);
     setCallbackError(null);
     try {
-      const { did, handle, agent } = await auth.handleCallback();
-      setAgent(agent, did, handle);
+      const { did, handle, avatar, agent } = await auth.handleCallback();
+      setAgent(agent, did, handle, avatar);
       router.replace('/');
       setProcessingCallback(false);
     } catch (err) {
@@ -63,10 +63,12 @@ export default function HomePageContent() {
   useEffect(() => {
     if (isAuthenticated) {
       hydrateCustomTopics();
+      // loadFollowedTopics internally awaits loadPopularTopics before
+      // setting loading=false, so the feed-store sees complete topic &
+      // feed-generator data on its first load.
       loadFollowedTopics();
-      loadPopularTopics();
     }
-  }, [isAuthenticated, hydrateCustomTopics, loadFollowedTopics, loadPopularTopics]);
+  }, [isAuthenticated, hydrateCustomTopics, loadFollowedTopics]);
 
   // Authenticated — main feed
   if (isAuthenticated) {
@@ -92,7 +94,7 @@ export default function HomePageContent() {
       <div className="min-h-screen flex items-center justify-center bg-surface-dark">
         <div className="text-center">
           <div className="w-8 h-8 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm text-gray-500">Completing sign in...</p>
+          <p className="text-sm text-text-500">Completing sign in...</p>
         </div>
       </div>
     );
@@ -118,10 +120,10 @@ export default function HomePageContent() {
       <div className="min-h-screen bg-surface-dark">
         <Header />
         <main className="max-w-2xl mx-auto px-4 py-20 text-center">
-          <h1 className="text-4xl font-bold text-gray-100 mb-4">
+          <h1 className="text-4xl font-bold text-text-100 mb-4">
             Reddit over Bluesky
           </h1>
-          <p className="text-lg text-gray-400 mb-8 max-w-md mx-auto">
+          <p className="text-lg text-text-400 mb-8 max-w-md mx-auto">
             Follow topics, not accounts. See the best posts from across the
             entire Bluesky network — intelligently matched to your interests
             by in-browser AI.
@@ -145,7 +147,7 @@ export default function HomePageContent() {
             />
           </div>
 
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-text-600">
             Sign in with your Bluesky account to get started.
           </p>
         </main>
@@ -180,8 +182,8 @@ function FeatureCard({
   return (
     <div className="card text-center">
       <div className="text-sky-400 mb-2 flex justify-center">{icon}</div>
-      <h3 className="text-sm font-semibold text-gray-200 mb-1">{title}</h3>
-      <p className="text-xs text-gray-500">{description}</p>
+      <h3 className="text-sm font-semibold text-text-200 mb-1">{title}</h3>
+      <p className="text-xs text-text-500">{description}</p>
     </div>
   );
 }

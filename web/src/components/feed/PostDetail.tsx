@@ -4,8 +4,8 @@ import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import type { PostThread, ThreadComment } from '@/types';
 import TopicBadge from '@/components/topics/TopicBadge';
-import HashtagBadge from '@/components/feed/HashtagBadge';
 import CommentItem from '@/components/feed/CommentItem';
+import VibeCheck from '@/components/feed/VibeCheck';
 import { extractHashtags } from '@/lib/utils/text';
 
 interface PostDetailProps {
@@ -31,8 +31,9 @@ export default function PostDetail({
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [replySuccess, setReplySuccess] = useState(false);
+  const [vibeOpen, setVibeOpen] = useState(false);
 
-  const { cleanText, hashtags } = useMemo(() => extractHashtags(post.text), [post.text]);
+  const { cleanText } = useMemo(() => extractHashtags(post.text), [post.text]);
 
   const isUpvoted = upvotedUris?.has(post.uri) ?? false;
 
@@ -67,7 +68,7 @@ export default function PostDetail({
       {/* Back link */}
       <Link
         href="/"
-        className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors mb-4"
+        className="inline-flex items-center gap-1.5 text-sm text-text-500 hover:text-text-300 transition-colors mb-4"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
@@ -83,27 +84,27 @@ export default function PostDetail({
             {post.author.avatar ? (
               <img src={post.author.avatar} alt="" className="w-10 h-10 rounded-full" />
             ) : (
-              <span className="text-sm font-bold text-gray-400">
+              <span className="text-sm font-bold text-text-400">
                 {(post.author.displayName || post.author.handle)[0].toUpperCase()}
               </span>
             )}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium text-gray-200 truncate">
+              <span className="font-medium text-text-200 truncate">
                 {post.author.displayName || post.author.handle}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <div className="flex items-center gap-1.5 text-xs text-text-500">
               <span className="truncate">{post.author.handle}</span>
-              <span className="text-gray-600">•</span>
+              <span className="text-text-600">•</span>
               <span suppressHydrationWarning>{timeAgo}</span>
             </div>
           </div>
         </div>
 
         {/* Post text */}
-        <p className="text-gray-100 text-base leading-relaxed whitespace-pre-wrap mb-3">
+        <p className="text-text-100 text-base leading-relaxed whitespace-pre-wrap mb-3">
           {cleanText}
         </p>
 
@@ -123,14 +124,14 @@ export default function PostDetail({
               />
             )}
             <div className="p-3 bg-surface-lighter">
-              <p className="text-xs text-gray-500 truncate">
+              <p className="text-xs text-text-500 truncate">
                 {new URL(post.embed!.external.uri).hostname}
               </p>
-              <p className="text-sm font-medium text-gray-200 mt-0.5 line-clamp-2">
+              <p className="text-sm font-medium text-text-200 mt-0.5 line-clamp-2">
                 {post.embed!.external.title}
               </p>
               {post.embed!.external.description && (
-                <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+                <p className="text-xs text-text-500 mt-1 line-clamp-2">
                   {post.embed!.external.description}
                 </p>
               )}
@@ -153,18 +154,7 @@ export default function PostDetail({
         {post.matchedTopics.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-4">
             {post.matchedTopics.slice(0, 4).map((match) => (
-              <Link key={match.topicId} href={`/topics/${match.topicId}`}>
-                <TopicBadge topicId={match.topicId} score={match.score} />
-              </Link>
-            ))}
-          </div>
-        )}
-
-        {/* Extracted hashtags */}
-        {hashtags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-4">
-            {hashtags.map((tag) => (
-              <HashtagBadge key={tag} tag={tag} />
+              <TopicBadge key={match.topicId} topicId={match.topicId} score={match.score} />
             ))}
           </div>
         )}
@@ -176,7 +166,7 @@ export default function PostDetail({
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors text-sm font-medium ${
               isUpvoted
                 ? 'bg-sky-500/20 text-sky-400'
-                : 'bg-surface-lighter text-gray-400 hover:bg-surface-light hover:text-sky-400'
+                : 'bg-surface-lighter text-text-400 hover:bg-surface-light hover:text-sky-400'
             }`}
             title={isUpvoted ? 'Upvoted' : 'Upvote'}
           >
@@ -188,14 +178,14 @@ export default function PostDetail({
 
           <button
             onClick={onDownvote}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-surface-lighter text-gray-400 hover:bg-surface-light hover:text-red-400 transition-colors text-sm font-medium"
+            className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-surface-lighter text-text-400 hover:bg-surface-light hover:text-red-400 transition-colors text-sm font-medium"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
 
-          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-lighter text-gray-500 text-sm font-medium">
+          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-lighter text-text-500 text-sm font-medium">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
@@ -206,14 +196,38 @@ export default function PostDetail({
 
           <button
             onClick={() => setReplyingToRoot(!replyingToRoot)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-lighter text-gray-400 hover:bg-surface-light hover:text-sky-400 transition-colors text-sm font-medium"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-lighter text-text-400 hover:bg-surface-light hover:text-sky-400 transition-colors text-sm font-medium"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
             </svg>
             Reply
           </button>
+
+          {/* Vibe Check */}
+          <button
+            onClick={() => setVibeOpen((v) => !v)}
+            className={`flex items-center gap-1 px-3 py-1.5 rounded-full transition-colors text-sm font-medium ${
+              vibeOpen
+                ? 'bg-purple-500/20 text-purple-400'
+                : 'bg-surface-lighter text-text-500 hover:bg-surface-light hover:text-purple-400'
+            }`}
+            title="Analyze sentiment"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+            </svg>
+          </button>
         </div>
+
+        {/* Vibe check inline panel */}
+        {vibeOpen && (
+          <VibeCheck
+            postUri={post.uri}
+            postText={post.text}
+            onClose={() => setVibeOpen(false)}
+          />
+        )}
       </article>
 
       {/* Reply form */}
@@ -225,11 +239,11 @@ export default function PostDetail({
             placeholder="Write a reply..."
             rows={3}
             maxLength={3000}
-            className="w-full text-sm bg-transparent border-0 resize-none focus:outline-none placeholder:text-gray-600 text-gray-200"
+            className="w-full text-sm bg-transparent border-0 resize-none focus:outline-none placeholder:text-text-600 text-text-200"
             autoFocus
           />
           <div className="flex items-center justify-between mt-2 pt-3 divider">
-            <span className="text-xs text-gray-500">{replyText.length}/3000</span>
+            <span className="text-xs text-text-500">{replyText.length}/3000</span>
             <div className="flex items-center gap-2">
               {replyError && (
                 <span className="text-xs text-red-400">{replyError}</span>
@@ -263,9 +277,9 @@ export default function PostDetail({
       {/* Comments section */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-200">
+          <h2 className="text-lg font-semibold text-text-200">
             Comments
-            <span className="text-gray-500 font-normal ml-1.5 text-base">
+            <span className="text-text-500 font-normal ml-1.5 text-base">
               {replies.length}
             </span>
           </h2>
@@ -273,7 +287,7 @@ export default function PostDetail({
 
         {replies.length === 0 ? (
           <div className="card text-center py-8">
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-text-500">
               No comments yet. Be the first to reply!
             </p>
           </div>

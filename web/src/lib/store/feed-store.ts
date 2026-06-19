@@ -16,6 +16,9 @@ const feedCursors = new Map<string, string | null>();
 const MAX_FEED_CACHE = 100;
 const MAX_CURSOR_CACHE = 200;
 
+/** Max time (ms) to wait for a feed-generator fetch before timing out. */
+const FEED_FETCH_TIMEOUT_MS = 8_000;
+
 function setFeedCache(key: string, posts: EnrichedPost[]) {
   if (feedCache.size >= MAX_FEED_CACHE) feedCache.clear();
   feedCache.set(key, posts);
@@ -161,6 +164,11 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
   displayCount: 15,
 
   loadFeed: async (skipLLMScoring = false) => {
+    // Prevent concurrent loads — a second call while the first is still
+    // in-flight would race on posts / loading / cursor, and the loser's
+    // set(...) would overwrite the winner, producing a flash of stale data.
+    if (get().loading) return;
+
     const { agent } = useAuthStore.getState();
     if (!agent) return;
 
@@ -171,7 +179,6 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
     try {
       let allPosts: EnrichedPost[] = [];
-      const seen = new Set<string>();
 
       if (followedIds.size > 0) {
         const allTopics = useTopicStore.getState().topics;
@@ -179,7 +186,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         const now = Date.now();
 
         // Collect all fetch tasks in parallel: feed generators + keyword search + hashtag search
-        type FetchTask = () => Promise<{ topicId: string; posts: EnrichedPost[] }>;
+        type FetchTask = () => Promise<{ topicId: string; posts: EnrichedPost[]; feedUri?: string }>;
 
         const fetchTasks: FetchTask[] = [];
 
@@ -190,25 +197,41 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
             for (const feed of topicFeedList) {
               fetchTasks.push(async () => {
                 const cached = feedCache.get(feed.uri);
-                if (cached) return { topicId, posts: cached };
+                if (cached) return { topicId, posts: cached, feedUri: feed.uri };
 
-                const result = await feeds.fetchCustomFeed(agent, feed.uri, { limit: 5 });
-                setFeedCache(feed.uri, result.posts);
-                setCursorCache(feed.uri, result.cursor ?? null);
+                // Race against a timeout so a slow feed generator (e.g. a
+                // cold-started skyfeed.me query) doesn't block the entire
+                // initial feed load. The timeout resolves with empty posts
+                // so the UI can render what it has while the slow feed is
+                // fetched on a subsequent load.
+                const timeoutResult: { posts: EnrichedPost[]; cursor?: string } = { posts: [] };
+                const result = await Promise.race([
+                  feeds.fetchCustomFeed(agent, feed.uri, { limit: 5 }),
+                  new Promise<typeof timeoutResult>((resolve) =>
+                    setTimeout(() => resolve(timeoutResult), FEED_FETCH_TIMEOUT_MS),
+                  ),
+                ]);
+
+                if (result.posts.length > 0) {
+                  setFeedCache(feed.uri, result.posts);
+                  setCursorCache(feed.uri, result.cursor ?? null);
+                }
                 const postsWithTopic = result.posts.map((p) => ({
                   ...p,
                   matchedTopics: [{ topicId, score: 0.5 }],
                 }));
-                return { topicId, posts: postsWithTopic };
+                return { topicId, posts: postsWithTopic, feedUri: feed.uri };
               });
             }
           }
         }
 
-        // Keyword search tasks (for seed terms, only if no feed generators available)
+        // Keyword search tasks (for seed terms, only if no feed generators
+        // available — EXCEPT custom topics, where the auto-published Skyfeed
+        // feed is supplemented with keyword search for more coverage).
         for (const topic of followedTopics) {
           const hasFeeds = (topicFeedsState.feedsByTopic[topic.id]?.length ?? 0) > 0;
-          if (!hasFeeds) {
+          if (!hasFeeds || topic.isCustom) {
             for (const term of topic.seedTerms.slice(0, 3)) {
               fetchTasks.push(async () => {
                 const result = await feeds.searchPosts(agent, term, { limit: 5 });
@@ -247,26 +270,84 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         // headroom in the browser's connection pool (6 per domain max)
         const fetchResults = await batchWithLimit(fetchTasks, (fn) => fn(), 4);
 
-        for (const r of fetchResults) {
-          if (r.status === 'rejected') continue;
-          for (const post of r.value.posts) {
-            if (seen.has(post.uri)) continue;
-            seen.add(post.uri);
-            allPosts.push(post);
+        // Count feed-generator tasks (they come first in the fetchTasks array)
+        let feedGenTaskCount = 0;
+        for (const topicId of followedIds) {
+          const topicFeedList = topicFeedsState.feedsByTopic[topicId];
+          if (topicFeedList && topicFeedList.length > 0) {
+            feedGenTaskCount += topicFeedList.length;
           }
         }
 
-        // Remove pinned posts and filter by age
-        allPosts = allPosts.filter((p) => !p.isPinned);
+        // Separate feed-generator posts (already curated by Bluesky) from
+        // search/hashtag posts (uncurated). Bluesky feed generators intelligently
+        // rank their output — we defer to their ordering instead of re-sorting.
+        const feedGenPostsByFeed = new Map<string, EnrichedPost[]>();
+        const otherPosts: EnrichedPost[] = [];
+        const seen = new Set<string>();
 
-        const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
-        allPosts = allPosts.filter((p) => {
+        for (let i = 0; i < fetchResults.length; i++) {
+          const r = fetchResults[i];
+          if (r.status === 'rejected') continue;
+          const isFeedGen = i < feedGenTaskCount;
+
+          for (const post of r.value.posts) {
+            if (seen.has(post.uri)) continue;
+            seen.add(post.uri);
+
+            if (isFeedGen && r.value.feedUri) {
+              let list = feedGenPostsByFeed.get(r.value.feedUri);
+              if (!list) {
+                list = [];
+                feedGenPostsByFeed.set(r.value.feedUri, list);
+              }
+              list.push(post);
+            } else {
+              otherPosts.push(post);
+            }
+          }
+        }
+
+        // Round-robin interleave feed-generator posts so no single feed dominates
+        const interleaved: EnrichedPost[] = [];
+        const feedLists = Array.from(feedGenPostsByFeed.values());
+        if (feedLists.length > 0) {
+          let pos = 0;
+          let added = true;
+          while (added) {
+            added = false;
+            for (const list of feedLists) {
+              if (pos < list.length) {
+                interleaved.push(list[pos]);
+                added = true;
+              }
+            }
+            pos++;
+          }
+        }
+
+        // Filter to last 24 hours
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+        const filteredFeedGen = interleaved.filter((p) => {
           const postTime = new Date(p.indexedAt).getTime();
-          return now - postTime < TWO_DAYS_MS;
+          return now - postTime < ONE_DAY_MS;
         });
 
-        // For skipLLMScoring, keyword scores are already applied; sort immediately
-        // For non-skip, apply LLM scoring per topic
+        // Sort search/hashtag posts by likeCount (they have no curation)
+        otherPosts.sort((a, b) => b.likeCount - a.likeCount);
+        const filteredOther = otherPosts.filter((p) => {
+          const postTime = new Date(p.indexedAt).getTime();
+          return now - postTime < ONE_DAY_MS;
+        });
+
+        // Combine: feed-generator posts first, then search/hashtag posts
+        allPosts = [...filteredFeedGen, ...filteredOther];
+
+        // Remove pinned posts
+        allPosts = allPosts.filter((p) => !p.isPinned);
+
+        // LLM scoring for topic matching (not used for ranking — Bluesky
+        // feed generators already rank posts intelligently)
         if (!skipLLMScoring) {
           const postsByTopic = new Map<string, EnrichedPost[]>();
           for (const post of allPosts) {
@@ -292,14 +373,6 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
             }
           }
         }
-
-        allPosts.sort((a, b) => {
-          const aBest = Math.max(0, ...a.matchedTopics.map((m) => m.score));
-          const bBest = Math.max(0, ...b.matchedTopics.map((m) => m.score));
-          const scoreDiff = bBest - aBest;
-          if (Math.abs(scoreDiff) > 0.1) return scoreDiff;
-          return b.likeCount - a.likeCount;
-        });
       } else {
         try {
           const hotResult = await feeds.fetchPopularFeed(agent, { limit: 30 });
@@ -558,11 +631,13 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
     const reranked: EnrichedPost[] = Array.from(updatedPosts.values());
     reranked.sort((a, b) => {
+      // Sort by likeCount primarily; Bluesky feeds already rank by engagement.
+      // LLM topic-match score is used as tiebreaker, not primary ranking signal.
+      const likeDiff = b.likeCount - a.likeCount;
+      if (likeDiff !== 0) return likeDiff;
       const aBest = Math.max(0, ...a.matchedTopics.map((m) => m.score));
       const bBest = Math.max(0, ...b.matchedTopics.map((m) => m.score));
-      const scoreDiff = bBest - aBest;
-      if (Math.abs(scoreDiff) > 0.1) return scoreDiff;
-      return b.likeCount - a.likeCount;
+      return bBest - aBest;
     });
 
     set({ posts: reranked });
@@ -574,6 +649,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
       console.warn('Cannot upvote: no agent (session not restored yet?)');
       return;
     }
+    if (get().upvotedPostUris.has(post.uri)) return;
 
       try {
       await feeds.likePost(agent, post.uri, post.cid);

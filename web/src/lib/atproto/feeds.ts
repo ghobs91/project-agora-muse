@@ -338,6 +338,42 @@ export async function replyToPost(
   });
 }
 
+// ─── User Preferences ────────────────────────────────────────────────
+
+/**
+ * Fetch the user's content language preferences from Bluesky.
+ * Returns the first explicitly preferred language code (from visibility 'show'),
+ * or an empty string if no preference is set.
+ */
+export async function getUserPreferredLanguage(agent: Agent): Promise<string> {
+  try {
+    if (typeof (agent as any).app?.bsky?.actor?.getPreferences !== 'function') {
+      return '';
+    }
+    const response = await agent.app.bsky.actor.getPreferences();
+    const prefs = response.data.preferences as Array<{
+      $type: string;
+      label?: string;
+      visibility?: string;
+    }>;
+
+    // Look for content language preferences with visibility 'show'
+    for (const pref of prefs) {
+      if (
+        pref.$type === 'app.bsky.actor.defs#contentLabelPref' &&
+        pref.label?.startsWith('lang:') &&
+        pref.visibility === 'show'
+      ) {
+        return pref.label.replace('lang:', '');
+      }
+    }
+
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 // ─── Mapping Helpers ─────────────────────────────────────────────────
 
 function mapFeedItemToPost(item: FeedItem): EnrichedPost {
@@ -349,7 +385,7 @@ function mapFeedItemToPost(item: FeedItem): EnrichedPost {
 }
 
 function mapFeedViewToPost(view: PostView): EnrichedPost {
-  const record = view.record as { text?: string; createdAt?: string };
+  const record = view.record as { text?: string; createdAt?: string; langs?: string[] };
 
   return {
     uri: view.uri,
@@ -363,6 +399,7 @@ function mapFeedViewToPost(view: PostView): EnrichedPost {
     replyCount: view.replyCount ?? 0,
     embed: view.embed ? mapEmbed(view.embed) : undefined,
     labels: (view.labels ?? []).map(mapLabel),
+    langs: record.langs,
     matchedTopics: [],
   };
 }
