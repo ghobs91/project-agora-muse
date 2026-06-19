@@ -10,7 +10,7 @@ export default function OfflinePage() {
           </svg>
         </div>
         <h1 className="text-2xl font-bold text-white mb-2">You're Offline</h1>
-        <p className="text-gray-400 mb-6">
+        <p className="text-text-400 mb-6">
           Agora Muse needs an internet connection to load fresh content.
           Reconnect and try again.
         </p>

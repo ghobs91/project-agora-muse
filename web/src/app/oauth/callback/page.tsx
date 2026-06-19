@@ -1,21 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store/auth-store';
 import * as auth from '@/lib/atproto/auth';
 
 export default function OAuthCallbackPage() {
-  const router = useRouter();
   const { setAgent } = useAuthStore();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const completeOAuth = async () => {
       try {
-        const { did, handle, agent } = await auth.handleCallback();
-        setAgent(agent, did, handle);
-        router.push('/');
+        const { did, handle, avatar, agent } = await auth.handleCallback();
+        setAgent(agent, did, handle, avatar);
+        // Use a full page navigation instead of client-side routing. This is
+        // more reliable in iOS PWA standalone mode and removes the OAuth
+        // callback URL (with state/code) from browser history.
+        window.location.replace('/');
       } catch (err) {
         setError(
           err instanceof Error ? err.message : 'OAuth callback failed',
@@ -24,7 +25,7 @@ export default function OAuthCallbackPage() {
     };
 
     completeOAuth();
-  }, [router, setAgent]);
+  }, [setAgent]);
 
   if (error) {
     return (
@@ -43,7 +44,7 @@ export default function OAuthCallbackPage() {
     <div className="min-h-screen bg-surface-dark flex items-center justify-center">
       <div className="text-center">
         <div className="w-8 h-8 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-sm text-gray-500">Completing sign in...</p>
+        <p className="text-sm text-text-500">Completing sign in...</p>
       </div>
     </div>
   );

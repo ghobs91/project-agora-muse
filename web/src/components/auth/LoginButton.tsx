@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useAuthStore } from '@/lib/store/auth-store';
 
 export default function LoginButton() {
-  const { isAuthenticated, loading, login, logout, handle, error } = useAuthStore();
+  const { isAuthenticated, loading, login, logout, handle, avatar, error } = useAuthStore();
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleSignIn = async () => {
@@ -18,7 +18,7 @@ export default function LoginButton() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-gray-500">
+      <div className="flex items-center gap-2 text-text-500">
         <div className="w-5 h-5 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin" />
         <span className="text-sm">Signing in...</span>
       </div>
@@ -28,8 +28,12 @@ export default function LoginButton() {
   if (isAuthenticated && handle) {
     return (
       <div className="flex items-center gap-2">
-        <div className="w-7 h-7 rounded-full bg-sky-600 flex items-center justify-center text-white text-xs font-bold">
-          {handle[0].toUpperCase()}
+        <div className="w-7 h-7 rounded-full bg-sky-600 flex items-center justify-center text-white text-xs font-bold overflow-hidden">
+          {avatar ? (
+            <img src={avatar} alt="" className="w-7 h-7 rounded-full" />
+          ) : (
+            handle[0].toUpperCase()
+          )}
         </div>
         <button onClick={logout} className="btn-ghost text-sm">
           Log out

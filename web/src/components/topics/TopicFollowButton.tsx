@@ -13,10 +13,10 @@ export default function TopicFollowButton({ topicId }: TopicFollowButtonProps) {
   return (
     <button
       onClick={() => (following ? unfollowTopic(topicId) : followTopic(topicId))}
-      className={`text-xs font-medium px-3 py-1 rounded-full transition-colors ${
+      className={`text-sm font-medium px-4 py-1.5 rounded-full transition-colors ${
         following
           ? 'bg-sky-600/20 text-sky-400 hover:bg-red-500/20 hover:text-red-400'
-          : 'bg-surface-lighter text-gray-400 hover:bg-sky-600/20 hover:text-sky-400'
+          : 'bg-surface-lighter text-text-400 hover:bg-sky-600/20 hover:text-sky-400'
       }`}
     >
       {following ? 'Following' : 'Follow'}

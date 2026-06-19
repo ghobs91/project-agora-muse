@@ -47,6 +47,7 @@ function ThreadContent() {
   const handleUpvote = async () => {
     if (!agent) { console.warn('Cannot upvote on thread page: no agent'); return; }
     if (!thread) return;
+    if (upvotedUris.has(thread.post.uri)) return;
     try {
       await feeds.likePost(agent, thread.post.uri, thread.post.cid);
       setUpvotedUris((prev) => new Set(prev).add(thread.post.uri));
@@ -94,6 +95,7 @@ function ThreadContent() {
 
   const handleCommentUpvote = async (comment: ThreadComment) => {
     if (!agent) return;
+    if (upvotedUris.has(comment.uri)) return;
     try {
       await feeds.likePost(agent, comment.uri, comment.cid);
       setUpvotedUris((prev) => new Set(prev).add(comment.uri));
@@ -125,7 +127,7 @@ function ThreadContent() {
       <div className="min-h-screen bg-surface-dark">
         <Header />
         <main className="max-w-3xl mx-auto px-4 py-12 text-center">
-          <p className="text-gray-500">Sign in to view posts.</p>
+          <p className="text-text-500">Sign in to view posts.</p>
         </main>
       </div>
     );
@@ -136,7 +138,7 @@ function ThreadContent() {
       <div className="min-h-screen bg-surface-dark">
         <Header />
         <main className="max-w-3xl mx-auto px-4 py-12 text-center">
-          <p className="text-gray-500">No post specified.</p>
+          <p className="text-text-500">No post specified.</p>
         </main>
       </div>
     );

@@ -12,7 +12,7 @@ function CustomTopicFeed() {
     return (
       <div className="min-h-screen bg-surface-dark">
         <main className="max-w-2xl mx-auto px-4 py-12 text-center">
-          <p className="text-gray-500">No topic specified.</p>
+          <p className="text-text-500">No topic specified.</p>
         </main>
       </div>
     );
