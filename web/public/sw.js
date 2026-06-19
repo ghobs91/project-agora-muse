@@ -62,6 +62,15 @@ self.addEventListener('fetch', (event) => {
 
   // Navigation requests: network-first with offline fallback
   if (request.mode === 'navigate') {
+    // OAuth callbacks must bypass the service worker. iOS PWAs in standalone
+    // mode can enter a redirect loop or serve a stale cached response when the
+    // service worker intercepts the identity provider's redirect back to the
+    // app. Let the browser load the callback page directly so the OAuth params
+    // are consumed exactly once.
+    if (url.pathname === '/oauth/callback' || url.pathname === '/oauth/callback/') {
+      return;
+    }
+
     event.respondWith(navigationFallback(request));
     return;
   }
