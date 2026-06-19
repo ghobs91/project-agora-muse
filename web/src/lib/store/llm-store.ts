@@ -24,8 +24,8 @@ import {
 
 const AVAILABLE_MODELS: ModelOption[] = [
   { id: 'gemma-2-2b-it-q4f16_1-MLC', name: 'Gemma 2 2B IT', size: '~1.9GB', backend: 'webllm' },
-  { id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', name: 'Llama 3.2 1B', size: '~0.9GB', backend: 'webllm' },
-  { id: 'Llama-3.2-3B-Instruct-q4f16_1-MLC', name: 'Llama 3.2 3B', size: '~2.3GB', backend: 'webllm' },
+  { id: 'gemma3-1b-it-q4f16_1-MLC', name: 'Gemma 3 1B IT', size: '~0.7GB', backend: 'webllm' },
+  { id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', name: 'SmolLM2 360M', size: '~0.4GB', backend: 'webllm' },
   { id: 'Xenova/all-MiniLM-L6-v2', name: 'all-MiniLM-L6-v2', size: '~23MB', backend: 'embeddings' },
 ];
 
