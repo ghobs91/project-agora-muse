@@ -10,6 +10,7 @@ interface AuthStore {
   isAuthenticated: boolean;
   did: string | null;
   handle: string | null;
+  avatar: string | null;
   agent: Agent | null;
   loading: boolean;
   error: string | null;
@@ -17,13 +18,14 @@ interface AuthStore {
   login: () => Promise<void>;
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
-  setAgent: (agent: Agent, did: string, handle: string) => void;
+  setAgent: (agent: Agent, did: string, handle: string, avatar?: string) => void;
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   isAuthenticated: false,
   did: null,
   handle: null,
+  avatar: null,
   agent: null,
   loading: false,
   error: null,
@@ -50,6 +52,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         isAuthenticated: false,
         did: null,
         handle: null,
+        avatar: null,
         agent: null,
         loading: false,
       });
@@ -74,6 +77,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           isAuthenticated: true,
           did: session.did,
           handle: session.handle,
+          avatar: session.avatar || null,
           agent: session.agent,
           loading: false,
           error: null,
@@ -89,12 +93,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
-  setAgent: (agent, did, handle) => {
+  setAgent: (agent, did, handle, avatar) => {
     set({
       isAuthenticated: true,
       agent,
       did,
       handle,
+      avatar: avatar || null,
       error: null,
     });
   },

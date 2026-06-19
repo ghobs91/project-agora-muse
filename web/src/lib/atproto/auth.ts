@@ -26,6 +26,7 @@ const SESSION_KEY = 'agora-muse-session';
 interface StoredSession {
   did: string;
   handle: string;
+  avatar?: string;
   active: boolean;
 }
 
@@ -237,6 +238,7 @@ export async function login(): Promise<void> {
 export async function handleCallback(): Promise<{
   did: string;
   handle: string;
+  avatar?: string;
   agent: Agent;
 }> {
   const client = await getClient();
@@ -250,22 +252,25 @@ export async function handleCallback(): Promise<{
 
   const agent = await createAgentFromOAuthSession(oauthSession);
 
-  // Fetch profile to get the handle
+  // Fetch profile to get the handle and avatar
   let handle = '';
+  let avatar: string | undefined;
   try {
     const profile = await agent.getProfile({ actor: did });
     handle = profile.data.handle;
+    avatar = profile.data.avatar;
   } catch {
     handle = did;
   }
 
-  saveSession({ did, handle, active: true });
-  return { did, handle, agent };
+  saveSession({ did, handle, avatar, active: true });
+  return { did, handle, avatar, agent };
 }
 
 export async function restoreSession(): Promise<{
   did: string;
   handle: string;
+  avatar?: string;
   agent: Agent;
 } | null> {
   const stored = loadSession();
@@ -277,7 +282,7 @@ export async function restoreSession(): Promise<{
     if (!oauthSession) return null;
 
     const agent = await createAgentFromOAuthSession(oauthSession);
-    return { did: stored.did, handle: stored.handle || stored.did, agent };
+    return { did: stored.did, handle: stored.handle || stored.did, avatar: stored.avatar, agent };
   } catch {
     clearSession();
     return null;
