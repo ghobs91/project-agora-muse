@@ -146,16 +146,6 @@ export default function TopicIcon({
   );
   const finalIconUrl = iconUrl || feedAvatar;
 
-  // If we have a feed avatar, use it directly
-  if (finalIconUrl) {
-    return (
-      <img
-        src={finalIconUrl}
-        alt=""
-        className={`w-[1em] h-[1em] rounded ${className || ''}`}
-      />
-    );
-  }
   let iconName: string | undefined = TOPIC_ICONS[topicId];
   let colorId = topicId;
 
@@ -167,7 +157,10 @@ export default function TopicIcon({
     }
   }
 
-  // For custom topics without a built-in match, resolve the icon
+  // For custom topics without a built-in match, resolve the icon.
+  // NOTE: these hooks must be called unconditionally (before any early
+  // return) to satisfy the Rules of Hooks. The early return for
+  // finalIconUrl happens after this block.
   const needsSearch = !iconName && !!seedTerms;
   const [apiIcon, setApiIcon] = useState<string | null>(
     needsSearch ? findBestLucideIcon(topicId, seedTerms) : null,
@@ -189,6 +182,19 @@ export default function TopicIcon({
       cancelled = true;
     };
   }, [topicId, seedTerms, needsSearch]);
+
+  // If we have a feed avatar or iconUrl, use it directly.
+  // This return must come AFTER all hooks to avoid "Rendered fewer hooks
+  // than expected" when finalIconUrl changes between renders.
+  if (finalIconUrl) {
+    return (
+      <img
+        src={finalIconUrl}
+        alt=""
+        className={`w-[1em] h-[1em] rounded ${className || ''}`}
+      />
+    );
+  }
 
   const finalIcon = iconName || apiIcon || 'lucide:tag';
   const colorClass = TOPIC_COLORS[colorId] || '';
