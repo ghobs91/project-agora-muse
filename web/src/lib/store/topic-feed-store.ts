@@ -22,6 +22,10 @@ interface TopicFeedStore {
   getFeedsForTopic: (topicId: string) => FeedGenerator[];
   getAllFeeds: () => FeedGenerator[];
   setFeedsForTopic: (topicId: string, feeds: FeedGenerator[]) => void;
+  /** Append a feed to a topic's list, deduplicating by URI. */
+  addFeedForTopic: (topicId: string, feed: FeedGenerator) => void;
+  /** True if Agora Muse auto-published a Skyfeed feed for this topic. */
+  hasAutoPublishedFeed: (topicId: string) => boolean;
   discoverFeedsForTopic: (topicId: string) => Promise<void>;
   clearFeedsForTopic: (topicId: string) => void;
 }
@@ -50,6 +54,22 @@ export const useTopicFeedStore = create<TopicFeedStore>()(
             [topicId]: feeds,
           },
         });
+      },
+
+      addFeedForTopic: (topicId, feed) => {
+        const existing = get().feedsByTopic[topicId] ?? [];
+        // Deduplicate by URI so re-publishing or re-discovery doesn't stack.
+        if (existing.some((f) => f.uri === feed.uri)) return;
+        set({
+          feedsByTopic: {
+            ...get().feedsByTopic,
+            [topicId]: [...existing, feed],
+          },
+        });
+      },
+
+      hasAutoPublishedFeed: (topicId) => {
+        return (get().feedsByTopic[topicId] ?? []).some((f) => f.autoPublished);
       },
 
       discoverFeedsForTopic: async (topicId) => {

@@ -15,6 +15,8 @@ export interface EnrichedPost {
   embed?: PostEmbed;
   // Labels applied by Bluesky labelers
   labels: PostLabel[];
+  // Language codes from the post record (e.g. ['en', 'ja'])
+  langs?: string[];
   // Whether this post is pinned by a feed generator
   isPinned?: boolean;
   // Topics matched by our LLM
@@ -79,6 +81,8 @@ export interface FeedGenerator {
     displayName?: string;
     avatar?: string;
   };
+  /** True when Agora Muse auto-published this feed via Skyfeed Builder */
+  autoPublished?: boolean;
 }
 
 /** A group of related feeds compiled into a "popular topic" */
@@ -123,6 +127,59 @@ export interface AuthState {
   did: string;
   handle: string;
   session: unknown; // OAuth session object
+}
+
+// ─── Skyfeed Builder ─────────────────────────────────────────────────
+
+/**
+ * Skyfeed Builder block pipeline DSL.
+ * A feed is defined by an ordered list of blocks stored in the
+ * `skyfeedBuilder` field of an `app.bsky.feed.generator` record.
+ * Served by `did:web:skyfeed.me` via the query-engine.
+ *
+ * Only the block variants Agora Muse constructs are modelled here.
+ * See https://github.com/skyfeed-dev/query-engine for the full DSL.
+ */
+export type SkyfeedBlock =
+  | { type: 'input'; inputType: 'firehose'; firehoseSeconds: number }
+  | {
+      type: 'input';
+      inputType: 'custom_likedbylikers';
+      historySeconds: number;
+      userScoreFunction: 'f0' | 'f1' | 'f2' | 'f3' | 'f4' | 'f5';
+      scoreExponent: string;
+    }
+  | {
+      type: 'regex';
+      value: string;
+      target:
+        | 'text'
+        | 'alt_text'
+        | 'link'
+        | 'text|alt_text'
+        | 'alt_text|link'
+        | 'text|link'
+        | 'text|alt_text|link';
+      caseSensitive?: boolean;
+      invert?: boolean;
+    }
+  | { type: 'remove'; subject: 'item'; value: 'post' | 'reply' | 'repost' | 'has_labels' | 'has_no_labels' }
+  | { type: 'remove'; subject: 'duplicates' }
+  | {
+      type: 'limit';
+      count: number;
+      limitType?: 'default' | 'posts_per_user';
+    }
+  | {
+      type: 'sort';
+      sortType: 'created_at' | 'hn' | 'likes' | 'repost_count' | 'reply_count' | 'random' | 'score';
+      sortDirection?: 'asc' | 'desc';
+      gravity?: string;
+    };
+
+export interface SkyfeedBuilderConfig {
+  displayName: string;
+  blocks: SkyfeedBlock[];
 }
 
 // ─── Feed ────────────────────────────────────────────────────────────
