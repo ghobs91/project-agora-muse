@@ -9,21 +9,6 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Dark theme palette inspired by Lemmy
-        dark: {
-          50: '#f8f9fc',
-          100: '#eef0f6',
-          200: '#d5d9e8',
-          300: '#a8b0c9',
-          400: '#7a85aa',
-          500: '#565f8a',
-          600: '#3d4570',
-          700: '#2a3055',
-          800: '#1e2340',
-          900: '#151930',
-          950: '#0d1020',
-        },
-        // Bluesky-inspired palette
         sky: {
           50: '#f0f7ff',
           100: '#e0effe',
@@ -37,12 +22,27 @@ const config: Config = {
           900: '#0b3f6e',
           950: '#072849',
         },
-        // Surface colors for dark theme
         surface: {
-          DEFAULT: '#1a1d2e',
-          light: '#242840',
-          lighter: '#2e3350',
-          dark: '#121525',
+          DEFAULT: 'rgba(var(--surface) / <alpha-value>)',
+          light: 'rgba(var(--surface-light) / <alpha-value>)',
+          lighter: 'rgba(var(--surface-lighter) / <alpha-value>)',
+          dark: 'rgba(var(--surface-dark) / <alpha-value>)',
+        },
+        dark: {
+          600: 'rgba(var(--border-hover) / <alpha-value>)',
+          700: 'rgba(var(--border-color) / <alpha-value>)',
+        },
+        text: {
+          100: 'rgba(var(--text-100) / <alpha-value>)',
+          200: 'rgba(var(--text-200) / <alpha-value>)',
+          300: 'rgba(var(--text-300) / <alpha-value>)',
+          400: 'rgba(var(--text-400) / <alpha-value>)',
+          500: 'rgba(var(--text-500) / <alpha-value>)',
+          600: 'rgba(var(--text-600) / <alpha-value>)',
+        },
+        ghost: {
+          DEFAULT: 'var(--ghost)',
+          hover: 'rgba(var(--ghost-hover) / <alpha-value>)',
         },
       },
     },

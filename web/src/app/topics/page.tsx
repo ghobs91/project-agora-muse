@@ -67,7 +67,7 @@ export default function TopicsPage() {
       <div className="min-h-screen bg-surface-dark">
         <Header />
         <main className="max-w-2xl mx-auto px-4 py-12 text-center">
-          <p className="text-gray-500">Sign in to browse topics.</p>
+          <p className="text-text-500">Sign in to browse topics.</p>
         </main>
       </div>
     );
@@ -81,7 +81,7 @@ export default function TopicsPage() {
     <div className="min-h-screen bg-surface-dark">
       <Header />
       <main className="max-w-3xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-bold text-gray-100 mb-6">Topics</h1>
+        <h1 className="text-2xl font-bold text-text-100 mb-6">Topics</h1>
 
         {/* Custom topic creation */}
         <section className="card mb-8">
@@ -95,7 +95,7 @@ export default function TopicsPage() {
               AI engine failed to load. Try refreshing.
             </p>
           ) : (
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-text-500 mb-3">
               Name a topic and we&apos;ll use AI to find related terms and the best Bluesky feeds for it.
             </p>
           )}
@@ -150,7 +150,7 @@ export default function TopicsPage() {
             <h2 className="section-label mb-3">
               Popular Topics ({popularTopics.length})
             </h2>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-text-500 mb-3">
               Compiled from the most popular feeds on Bluesky — each topic
               aggregates multiple curated feeds about the same subject.
             </p>
@@ -205,14 +205,14 @@ function TopicCard({
         <div className="flex items-center gap-1.5">
           <TopicIcon topicId={topic.id} className="text-base shrink-0" seedTerms={topic.seedTerms} iconUrl={topic.iconUrl} />
           {linkable ? (
-            <Link href={href} className="font-medium text-sm text-gray-200 hover:text-sky-400 transition-colors">
+            <Link href={href} className="font-medium text-sm text-text-200 hover:text-sky-400 transition-colors">
               {topic.name}
             </Link>
           ) : (
-            <h3 className="font-medium text-sm text-gray-200">{topic.name}</h3>
+            <h3 className="font-medium text-sm text-text-200">{topic.name}</h3>
           )}
         </div>
-        <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
+        <p className="text-xs text-text-500 mt-0.5 line-clamp-2">
           {isCustom && <span className="text-sky-500/70 mr-1">Custom</span>}
           {topic.description}
         </p>
@@ -220,13 +220,13 @@ function TopicCard({
           {topic.seedTerms.slice(0, 3).map((term) => (
             <span
               key={term}
-              className="px-1.5 py-0.5 rounded text-xs bg-surface-lighter text-gray-500"
+              className="px-1.5 py-0.5 rounded text-xs bg-surface-lighter text-text-500"
             >
               {term}
             </span>
           ))}
           {topic.seedTerms.length > 3 && (
-            <span className="text-xs text-gray-600">
+            <span className="text-xs text-text-600">
               +{topic.seedTerms.length - 3}
             </span>
           )}
@@ -237,7 +237,7 @@ function TopicCard({
         {onRemove && (
           <button
             onClick={onRemove}
-            className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+            className="text-xs text-text-600 hover:text-red-400 transition-colors"
             title="Remove custom topic"
           >
             x

@@ -47,7 +47,7 @@ export default function TopicSuggestions({
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-xs text-gray-500">
+      <div className="flex items-center gap-2 text-xs text-text-500">
         <div className="w-3 h-3 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin" />
         Analyzing content...
       </div>
@@ -58,16 +58,16 @@ export default function TopicSuggestions({
 
   return (
     <div>
-      <p className="text-xs text-gray-500 mb-2">Suggested topics:</p>
+      <p className="text-xs text-text-500 mb-2">Suggested topics:</p>
       <div className="flex flex-wrap gap-2">
         {suggestions.map(({ topic, score }) => (
           <button
             key={topic.id}
             onClick={() => onSelect(topic)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-surface-lighter text-gray-400 hover:bg-sky-600/20 hover:text-sky-400 transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-surface-lighter text-text-400 hover:bg-sky-600/20 hover:text-sky-400 transition-colors"
           >
             + {topic.name}
-            <span className="text-gray-600">
+            <span className="text-text-600">
               {Math.round(score * 100)}%
             </span>
           </button>

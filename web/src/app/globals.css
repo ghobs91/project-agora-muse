@@ -2,9 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Theme CSS Variables (space-separated RGB channels) ──────────────── */
+
+/* Light mode */
+:root {
+  --surface: 255 255 255;
+  --surface-light: 245 245 245;
+  --surface-lighter: 229 229 229;
+  --surface-dark: 250 250 250;
+  --border-color: 224 224 224;
+  --border-hover: 204 204 204;
+  --ghost: transparent;
+  --ghost-hover: 240 240 240;
+
+  --text-100: 17 24 39;
+  --text-200: 31 41 55;
+  --text-300: 55 65 81;
+  --text-400: 75 85 99;
+  --text-500: 107 114 128;
+  --text-600: 156 163 175;
+
+  --glass-bg: 255 255 255 / 0.65;
+  --glass-border: 255 255 255 / 0.25;
+  --glass-highlight: 255 255 255 / 0.5;
+
+  color-scheme: light;
+}
+
+/* Dark mode */
+html.dark {
+  --surface: 28 28 30;
+  --surface-light: 44 44 46;
+  --surface-lighter: 58 58 60;
+  --surface-dark: 18 18 18;
+  --border-color: 56 56 58;
+  --border-hover: 72 72 74;
+  --ghost: transparent;
+  --ghost-hover: 44 44 46;
+
+  --text-100: 243 244 246;
+  --text-200: 229 231 235;
+  --text-300: 209 213 219;
+  --text-400: 156 163 175;
+  --text-500: 107 114 128;
+  --text-600: 75 85 99;
+
+  --glass-bg: 255 255 255 / 0.06;
+  --glass-border: 255 255 255 / 0.08;
+  --glass-highlight: 255 255 255 / 0.1;
+
+  color-scheme: dark;
+}
+
+/* ─── Base ────────────────────────────────────────────────────────────── */
 @layer base {
   body {
-    @apply bg-surface-dark text-gray-200 antialiased;
+    @apply bg-surface-dark text-text-200 antialiased;
   }
 
   ::selection {
@@ -12,6 +65,7 @@
   }
 }
 
+/* ─── Components ──────────────────────────────────────────────────────── */
 @layer components {
   .btn-primary {
     @apply bg-sky-600 text-white px-4 py-2 rounded-lg font-medium
@@ -20,14 +74,14 @@
   }
 
   .btn-secondary {
-    @apply bg-surface-lighter text-gray-300 px-4 py-2 rounded-lg font-medium
+    @apply bg-surface-lighter text-text-300 px-4 py-2 rounded-lg font-medium
            hover:bg-surface-light active:bg-surface-lighter transition-colors
            disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-ghost {
-    @apply text-gray-400 px-3 py-1.5 rounded-lg font-medium
-           hover:bg-surface-light hover:text-gray-200 active:bg-surface-lighter transition-colors;
+    @apply text-text-400 px-3 py-1.5 rounded-lg font-medium
+           hover:bg-surface-light hover:text-text-200 active:bg-surface-lighter transition-colors;
   }
 
   .card {
@@ -40,14 +94,14 @@
 
   .input-dark {
     @apply bg-surface-light border border-dark-700/50 rounded-lg px-3 py-2
-           text-gray-200 placeholder-gray-500
+           text-text-200 placeholder-text-500
            focus:border-sky-500 focus:ring-1 focus:ring-sky-500/50
            outline-none transition-colors;
   }
 
   .select-dark {
     @apply bg-surface-light border border-dark-700/50 rounded-lg px-3 py-1.5
-           text-gray-300 text-sm
+           text-text-300 text-sm
            focus:border-sky-500 focus:ring-1 focus:ring-sky-500/50
            outline-none transition-colors cursor-pointer;
   }
@@ -57,6 +111,37 @@
   }
 
   .section-label {
-    @apply text-xs font-semibold text-gray-500 uppercase tracking-wider;
+    @apply text-xs font-semibold text-text-500 uppercase tracking-wider;
+  }
+
+  .mobile-dock {
+    @apply fixed left-1/2 -translate-x-1/2 z-40 lg:hidden;
+    @apply w-[min(92%,28rem)];
+    @apply rounded-full flex items-center justify-around;
+    @apply px-2 py-1.5;
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+    background: rgba(var(--glass-bg));
+    backdrop-filter: blur(40px) saturate(200%);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    border: 1px solid rgba(var(--glass-border));
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.15),
+      inset 0 1px 0 rgba(var(--glass-highlight));
+  }
+
+  .mobile-dock-btn {
+    @apply flex flex-col items-center justify-center gap-0.5;
+    @apply text-text-500 hover:text-sky-400;
+    @apply transition-colors duration-200;
+    @apply py-2 px-3 rounded-full;
+    @apply flex-1 min-w-0;
+  }
+
+  .mobile-dock-btn-active {
+    @apply text-sky-400 bg-sky-500/10;
+  }
+
+  .mobile-dock-label {
+    @apply text-[10px] font-medium;
   }
 }
