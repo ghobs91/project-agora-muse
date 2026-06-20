@@ -73,7 +73,10 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   const hasPendingChanges = pendingRemovals.size > 0 || pendingAdditions.length > 0;
   const observerRef = useRef<HTMLDivElement>(null);
   const cursorsRef = useRef<Map<string, string | null>>(new Map());
+  const loadingMoreRef = useRef(false);
   const postsRef = useRef<EnrichedPost[]>([]);
+  const loadedTopicIdRef = useRef<string | null>(null);
+  const loadedTermsKeyRef = useRef<string>('');
   postsRef.current = posts;
 
   useEffect(() => {
@@ -87,10 +90,26 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   useEffect(() => {
     if (!isAuthenticated || !agent || !topic) return;
 
+    // Build a key representing the current term selection. If it matches what
+    // we already loaded for this topic, skip — the effect would otherwise
+    // re-run every time `topic`'s object reference changes (e.g. when
+    // discoverFeedsForTopic calls setTopicIcon), which would reset `posts`
+    // and appear to "reload" the initial feed.
+    const termsKey = [...removedTerms].sort().join(',') + '|' + [...addedTerms].sort().join(',');
+    if (
+      loadedTopicIdRef.current === topicId &&
+      loadedTermsKeyRef.current === termsKey &&
+      postsRef.current.length > 0
+    ) {
+      return;
+    }
+
     const loadTopicFeed = async () => {
       setLoading(true);
       setError(null);
       setDisplayCount(15);
+      // Reset server cursors so pagination starts fresh on reload
+      cursorsRef.current.clear();
 
       try {
         // Ensure feed metadata is up to date (fetch if missing, update seed terms/icon regardless)
@@ -136,6 +155,8 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         scoredPosts.sort((a, b) => b.score - a.score);
         allPosts = scoredPosts.map((s) => s.post);
         setPosts(allPosts);
+        loadedTopicIdRef.current = topicId;
+        loadedTermsKeyRef.current = termsKey;
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load posts');
       } finally {
@@ -280,9 +301,11 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   }, [isAuthenticated, agent, topic, topicId, getFeedsForTopic, discoverFeedsForTopic, removedTerms, addedTerms]);
 
   const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || !topic || !agent) return;
+    loadingMoreRef.current = true;
+
     const cursors = cursorsRef.current;
     const topicFeeds = getFeedsForTopic(topicId);
-    if (!topic || !agent) return;
 
     // Try server-side pagination first
     const feedsWithCursor = topicFeeds.filter((f) => {
@@ -290,10 +313,10 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
       return c && c !== null;
     });
 
-    const searchCursors = topic.seedTerms
-      .filter((term) => !removedTerms.has(term))
-      .concat(addedTerms)
-      .slice(0, 5)
+    const activeTerms = topic.seedTerms.filter((t) => !removedTerms.has(t));
+    const allTerms = [...activeTerms, ...addedTerms].slice(0, 5);
+    const searchCursors = allTerms
+      .slice(0, 3)
       .filter((term) => {
         const c = cursors.get(`search:${term}`);
         return c && c !== null;
@@ -366,8 +389,16 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
 
           setPosts((prev) => [...prev, ...scoredNew]);
           setLoading(false);
+          loadingMoreRef.current = false;
           return;
         }
+
+        // Server returned no new posts even with valid cursors — mark
+        // server-side pagination as exhausted by clearing cursors. Without
+        // this, hasServerCursors stays true and the observer keeps firing
+        // loadMore in a tight loop, each call refetching the same page.
+        for (const f of feedsWithCursor) cursors.delete(f.uri);
+        for (const term of searchCursors) cursors.delete(`search:${term}`);
       } catch {
         // Fall through
       }
@@ -376,7 +407,8 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
 
     // Server-side exhausted — fall back to client-side display
     setDisplayCount((prev) => prev + 15);
-  }, [agent, topic, topicId, getFeedsForTopic]);
+    loadingMoreRef.current = false;
+  }, [agent, topic, topicId, getFeedsForTopic, removedTerms, addedTerms]);
 
   useEffect(() => {
     const el = observerRef.current;
@@ -403,7 +435,26 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         .slice(0, displayCount),
     [posts, displayCount, hiddenPostUris, moderatedPostUris],
   );
-  const hasMore = displayCount < posts.length;
+
+  const hasServerCursors = useMemo(() => {
+    if (!topic) return false;
+    const cursors = cursorsRef.current;
+    const topicFeeds = getFeedsForTopic(topicId);
+    const activeTerms = topic.seedTerms.filter((t) => !removedTerms.has(t));
+    const allTerms = [...activeTerms, ...addedTerms].slice(0, 5);
+
+    const hasFeedCursor = topicFeeds.some((f) => {
+      const c = cursors.get(f.uri);
+      return c && c !== null;
+    });
+    const hasSearchCursor = allTerms.slice(0, 3).some((term) => {
+      const c = cursors.get(`search:${term}`);
+      return c && c !== null;
+    });
+    return hasFeedCursor || hasSearchCursor;
+  }, [topic, topicId, getFeedsForTopic, removedTerms, addedTerms]);
+
+  const hasMore = displayCount < posts.length || hasServerCursors;
 
   const parentRef = useRef<HTMLDivElement>(null);
   const [parentOffset, setParentOffset] = useState(0);
@@ -421,6 +472,7 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
 
   const virtualizer = useWindowVirtualizer({
     count: visiblePosts.length,
+    getItemKey: (index) => visiblePosts[index].uri,
     estimateSize: (index) => {
       const post = visiblePosts[index];
       const hasImage = post.embed?.type === 'image' && (post.embed.images?.length ?? 0) > 0;
@@ -433,10 +485,6 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
     scrollMargin: parentOffset,
   });
   const virtualItems = virtualizer.getVirtualItems();
-
-  useEffect(() => {
-    virtualizer.measure();
-  }, [visiblePosts.length, virtualizer]);
 
   if (authLoading || !mounted) {
     return (

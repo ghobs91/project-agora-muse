@@ -171,6 +171,7 @@ export default function FeedList() {
 
   const virtualizer = useWindowVirtualizer({
     count: visiblePosts.length,
+    getItemKey: (index) => visiblePosts[index].uri,
     estimateSize: (index) => {
       const post = visiblePosts[index];
       const hasImage = post.embed?.type === 'image' && (post.embed.images?.length ?? 0) > 0;
@@ -182,12 +183,6 @@ export default function FeedList() {
     overscan: 5,
     scrollMargin: parentOffset,
   });
-
-  // Remeasure when count changes (e.g. after hiding/downvoting a post)
-  // so remaining items don't overlap with stale positions.
-  useEffect(() => {
-    virtualizer.measure();
-  }, [visiblePosts.length, virtualizer]);
 
   // Initial load — reactive to auth + topic loading status via Zustand subscription
   useEffect(() => {
