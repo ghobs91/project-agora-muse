@@ -49,7 +49,7 @@ export default function ModerationPage() {
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-6">
         <h1 className="text-2xl font-bold text-text-100 mb-2">Settings</h1>
-        <p className="text-sm text-text-500 mb-6">
+        <p className="text-base text-text-500 mb-6">
           In-browser AI model, moderation rules, and appearance.
         </p>
 
@@ -60,8 +60,8 @@ export default function ModerationPage() {
             <h2 className="text-lg font-semibold text-text-100 mb-3">Appearance</h2>
             <div className="card flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-text-200">Color theme</p>
-                <p className="text-xs text-text-500">Switch between dark and light mode</p>
+                <p className="text-base font-medium text-text-200">Color theme</p>
+                <p className="text-sm text-text-500">Switch between dark and light mode</p>
               </div>
               <ThemeToggle />
             </div>

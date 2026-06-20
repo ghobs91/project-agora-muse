@@ -37,14 +37,14 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
     <div className="space-y-4">
       {/* Add rule form */}
       <form onSubmit={handleSubmit} className="card">
-        <h4 className="font-medium text-sm text-text-200 mb-3">
+        <h4 className="font-medium text-base text-text-200 mb-3">
           Add Moderation Rule
         </h4>
 
         <div className="space-y-3">
           {/* Rule type */}
           <div>
-            <label className="block text-xs text-text-500 mb-1">Rule Type</label>
+            <label className="block text-sm text-text-500 mb-1">Rule Type</label>
             <select
               value={ruleType}
               onChange={(e) =>
@@ -61,7 +61,7 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
 
           {/* Value */}
           <div>
-            <label className="block text-xs text-text-500 mb-1">
+            <label className="block text-sm text-text-500 mb-1">
               {ruleType === 'keyword'
                 ? 'Keyword or phrase to filter'
                 : ruleType === 'semantic'
@@ -98,7 +98,7 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
       {/* Existing rules */}
       {rules.length > 0 && (
         <div className="card">
-          <h4 className="font-medium text-sm text-text-200 mb-3">
+          <h4 className="font-medium text-base text-text-200 mb-3">
             Active Rules ({rules.length})
           </h4>
           <ul className="space-y-2">
@@ -117,7 +117,7 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
                 </div>
                 <button
                   onClick={() => removeRule(rule.id)}
-                  className="text-xs text-red-400 hover:text-red-300 ml-2 shrink-0"
+                  className="text-sm text-red-400 hover:text-red-300 ml-2 shrink-0"
                 >
                   Remove
                 </button>
