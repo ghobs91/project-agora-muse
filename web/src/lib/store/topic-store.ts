@@ -25,12 +25,54 @@ function loadCustomTopicsFromStorage(): Topic[] {
   }
 }
 
-function saveCustomTopicsToStorage(topics: Topic[]): void {
-  if (typeof window === 'undefined') return;
+/**
+ * Migrate localStorage custom topics to PDS, then clear the localStorage key.
+ * Only runs once per user — once cleared, future reads come from PDS.
+ */
+async function migrateLocalCustomTopicsToPDS(): Promise<void> {
+  const agent = useAuthStore.getState().agent;
+  if (!agent) return;
+
+  const localTopics = loadCustomTopicsFromStorage();
+  if (localTopics.length === 0) return;
+
+  for (const topic of localTopics) {
+    try {
+      await records.saveCustomTopic(agent, {
+        topicId: topic.id,
+        name: topic.name,
+        description: topic.description,
+        seedTerms: topic.seedTerms,
+        iconUrl: topic.iconUrl,
+      });
+    } catch { /* skip conflicts — PDS record already exists */ }
+  }
+
   try {
-    localStorage.setItem(CUSTOM_TOPICS_KEY, JSON.stringify(topics));
+    localStorage.removeItem(CUSTOM_TOPICS_KEY);
+  } catch { /* ignore */ }
+}
+
+async function loadCustomTopicsFromPDS(): Promise<Topic[]> {
+  const agent = useAuthStore.getState().agent;
+  if (!agent) return [];
+
+  // One-time migration from localStorage to PDS
+  await migrateLocalCustomTopicsToPDS();
+
+  try {
+    const pdsRecords = await records.getCustomTopics(agent);
+    return pdsRecords.map((r) => ({
+      id: r.topicId,
+      name: r.name,
+      description: r.description,
+      seedTerms: r.seedTerms,
+      followerCount: 0,
+      isCustom: true,
+      iconUrl: r.iconUrl,
+    }));
   } catch {
-    // Storage full or unavailable — silently ignore
+    return [];
   }
 }
 
@@ -167,7 +209,7 @@ interface TopicStore {
   /** true while loadPopularTopics() is fetching (prevents concurrent calls) */
   popularTopicsLoading: boolean;
 
-  hydrateCustomTopics: () => void;
+  hydrateCustomTopics: () => Promise<void>;
   loadPopularTopics: () => Promise<void>;
   loadFollowedTopics: () => Promise<void>;
   followTopic: (topicId: string) => Promise<void>;
@@ -186,8 +228,8 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
   popularTopicsLoaded: false,
   popularTopicsLoading: false,
 
-  hydrateCustomTopics: () => {
-    const customTopics = loadCustomTopicsFromStorage();
+  hydrateCustomTopics: async () => {
+    const customTopics = await loadCustomTopicsFromPDS();
     if (customTopics.length === 0) return;
     const currentTopics = get().topics;
     const newTopics = customTopics.filter(
@@ -355,11 +397,6 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
 
     set({ topics: [...currentTopics, topic] });
 
-    const customTopics = currentTopics
-      .filter((t) => t.isCustom)
-      .concat(topic);
-    saveCustomTopicsToStorage(customTopics);
-
     // Auto-follow the newly created custom topic
     try {
       await get().followTopic(topic.id);
@@ -367,11 +404,20 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
       // Silently ignore — topic was created, follow is optional
     }
 
-    // Publish a Skyfeed Builder feed for this topic so it has a real,
+    // Save to PDS so custom topics sync across devices.
+    // Also publish a Skyfeed Builder feed for this topic so it has a real,
     // followable Bluesky feed. Non-fatal: the topic is usable without it,
     // and the feed-store falls back to keyword/hashtag search.
     const agent = useAuthStore.getState().agent;
     if (agent) {
+      // Persist the topic definition to PDS
+      records.saveCustomTopic(agent, {
+        topicId: topic.id,
+        name: topic.name,
+        description: topic.description,
+        seedTerms: topic.seedTerms,
+      }).catch(() => {});
+
       try {
         // Generate the regex with the WebLLM (already loaded for seed-term
         // generation), falling back to a deterministic keyword pattern.
@@ -427,8 +473,10 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
     const remaining = currentTopics.filter((t) => t.id !== topicId);
     set({ topics: remaining });
 
-    const customTopics = remaining.filter((t) => t.isCustom);
-    saveCustomTopicsToStorage(customTopics);
+    // Delete the PDS record so custom topics sync across devices
+    if (agent) {
+      records.deleteCustomTopic(agent, topicId).catch(() => {});
+    }
   },
 
   setTopicIcon: (topicId: string, iconUrl: string) => {
@@ -439,8 +487,18 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
         t.id === topicId ? { ...t, iconUrl } : t,
       ),
     });
-    // Persist to localStorage if this is a custom topic
-    const customTopics = get().topics.filter((t) => t.isCustom);
-    saveCustomTopicsToStorage(customTopics);
+    // Persist icon to PDS if this is a custom topic
+    if (existing?.isCustom) {
+      const agent = useAuthStore.getState().agent;
+      if (agent) {
+        records.saveCustomTopic(agent, {
+          topicId,
+          name: existing.name,
+          description: existing.description,
+          seedTerms: existing.seedTerms,
+          iconUrl,
+        }).catch(() => {});
+      }
+    }
   },
 }));

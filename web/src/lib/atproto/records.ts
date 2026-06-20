@@ -16,9 +16,11 @@ import {
   type TopicFollowRecord,
   type ModerationRuleRecord,
   type HiddenPostRecord,
+  type CustomTopicRecord,
   topicFollowKey,
   moderationRuleKey,
   hiddenPostKey,
+  customTopicKey,
 } from '@/lib/lexicon/types';
 
 // ─── Topic Follows ───────────────────────────────────────────────────
@@ -163,6 +165,57 @@ export async function unhidePost(
     repo: agent.assertDid ?? '',
     collection: LEXICONS.hiddenPost,
     rkey: hiddenPostKey(postUri),
+  });
+}
+
+// ─── Custom Topics ───────────────────────────────────────────────────
+
+export async function getCustomTopics(
+  agent: Agent,
+): Promise<CustomTopicRecord[]> {
+  try {
+    const response = await agent.com.atproto.repo.listRecords({
+      repo: agent.assertDid ?? '',
+      collection: LEXICONS.customTopic,
+    });
+    return (response.data.records || []).map(
+      (r) => r.value as CustomTopicRecord,
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function saveCustomTopic(
+  agent: Agent,
+  topic: { topicId: string; name: string; description: string; seedTerms: string[]; iconUrl?: string },
+): Promise<void> {
+  const record: CustomTopicRecord = {
+    $type: LEXICONS.customTopic,
+    topicId: topic.topicId,
+    name: topic.name,
+    description: topic.description,
+    seedTerms: topic.seedTerms,
+    iconUrl: topic.iconUrl,
+    createdAt: new Date().toISOString(),
+  };
+
+  await agent.com.atproto.repo.putRecord({
+    repo: agent.assertDid ?? '',
+    collection: LEXICONS.customTopic,
+    rkey: customTopicKey(topic.topicId),
+    record: record as unknown as Record<string, unknown>,
+  });
+}
+
+export async function deleteCustomTopic(
+  agent: Agent,
+  topicId: string,
+): Promise<void> {
+  await agent.com.atproto.repo.deleteRecord({
+    repo: agent.assertDid ?? '',
+    collection: LEXICONS.customTopic,
+    rkey: customTopicKey(topicId),
   });
 }
 
