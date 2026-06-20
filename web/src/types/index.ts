@@ -99,13 +99,13 @@ export interface PopularTopicGroup {
 
 // ─── User Preferences (stored on PDS) ────────────────────────────────
 
-/** Record: app.agora.muse.topicFollow */
+/** Record: app.agora.topicFollow */
 export interface TopicFollowRecord {
   topicId: string;
   followedAt: string;
 }
 
-/** Record: app.agora.muse.moderationRule */
+/** Record: app.agora.moderationRule */
 export interface ModerationRuleRecord {
   id: string;
   ruleType: 'keyword' | 'semantic' | 'labeler' | 'mute';
@@ -113,7 +113,7 @@ export interface ModerationRuleRecord {
   createdAt: string;
 }
 
-/** Record: app.agora.muse.hiddenPost */
+/** Record: app.agora.hiddenPost */
 export interface HiddenPostRecord {
   postUri: string;
   hiddenAt: string;
