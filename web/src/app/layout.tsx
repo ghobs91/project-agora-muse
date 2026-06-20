@@ -20,8 +20,9 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
+      { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
       { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/favicon-32x32.png', sizes: '48x48', type: 'image/png' },
     ],
     apple: [
       { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
@@ -58,7 +59,7 @@ export default function RootLayout({
         <ThemeProvider>
           <PwaRegistrator />
           <AutoLoadLLM />
-          <div className="pb-24 lg:pb-0">
+          <div className="pb-40 lg:pb-0">
             {children}
           </div>
           <MobileDock />
