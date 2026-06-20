@@ -8,10 +8,10 @@ const STATUS_CONFIG: Record<
   LLMStatus,
   { label: string; dot: string; action: string }
 > = {
-  unloaded: { label: 'LLM idle', dot: 'bg-gray-500', action: 'Load' },
-  loading: { label: 'LLM loading', dot: 'bg-amber-400 animate-pulse', action: '' },
-  ready: { label: 'LLM ready', dot: 'bg-emerald-400', action: '' },
-  error: { label: 'LLM error', dot: 'bg-red-400', action: 'Retry' },
+  unloaded: { label: 'AI model idle', dot: 'bg-gray-500', action: 'Load' },
+  loading: { label: 'Loading AI model...', dot: 'bg-amber-400 animate-pulse', action: '' },
+  ready: { label: 'AI model ready', dot: 'bg-emerald-400', action: '' },
+  error: { label: 'AI model failed', dot: 'bg-red-400', action: 'Retry' },
 };
 
 export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
@@ -45,17 +45,20 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
             }
           }}
           className="flex items-center gap-1.5 text-xs text-text-500 hover:text-text-300 transition-colors"
-          title={`${config.label}${status === 'loading' ? ` (${progress}%)` : ''} (${selectedModelInfo?.name}) — ${status === 'ready' ? 'click to change model' : `click to ${config.action.toLowerCase()}`}`}
+          title={`${config.label}${status === 'loading' ? ` (${progress}%)` : ''} — ${status === 'ready' ? 'click to change model' : `click to ${config.action.toLowerCase()}`}`}
         >
           <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-          {status === 'loading' ? `${progress}%` : config.label.replace('LLM ', '')}
+          {status === 'loading' ? `${progress}%` : config.label.replace('AI model ', '')}
         </button>
 
         {dropdownOpen && (
-          <div className="absolute top-full right-0 mt-2 w-64 card z-50 shadow-xl border border-dark-700/50">
-            <div className="p-3 space-y-2">
-              <h4 className="text-xs font-medium text-text-400 uppercase tracking-wider">Select Model</h4>
-              <div className="space-y-1">
+          <div className="absolute top-full right-0 mt-2 w-72 card z-50 shadow-xl border border-dark-700/50">
+            <div className="p-3 space-y-3">
+              <div>
+                <h4 className="text-sm font-medium text-text-200">Choose AI model</h4>
+                <p className="text-xs text-text-500 mt-0.5">Runs in your browser. Downloaded once.</p>
+              </div>
+              <div className="space-y-1.5">
                 {availableModels.map((model) => (
                   <button
                     key={model.id}
@@ -63,14 +66,25 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
                       setModel(model.id);
                       setDropdownOpen(false);
                     }}
-                    className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                    className={`w-full text-left p-2.5 rounded-lg text-xs transition-colors border ${
                       selectedModel === model.id
-                        ? 'bg-sky-600/20 text-sky-400'
-                        : 'text-text-400 hover:bg-surface-lighter'
+                        ? 'bg-sky-600/15 border-sky-500/30 text-sky-400'
+                        : 'bg-surface-dark border-transparent text-text-300 hover:bg-surface-lighter'
                     }`}
                   >
-                    <div className="font-medium">{model.name}</div>
-                    <div className="text-text-600">{model.size} · {model.backend === 'webllm' ? 'WebLLM' : 'Embeddings'}</div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="font-semibold">{model.label}</div>
+                      {model.recommended && (
+                        <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-medium">
+                          Recommended
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-text-500 mt-0.5">{model.description}</div>
+                    <div className="flex items-center gap-2 mt-1.5 text-[10px] text-text-600">
+                      <span className="px-1.5 py-0.5 rounded bg-surface-lighter">{model.size}</span>
+                      <span>{model.name}</span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -84,25 +98,31 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
   return (
     <div className="card space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="font-medium text-sm text-text-200">In-Browser AI Model</h4>
+        <div>
+          <h4 className="font-medium text-base text-text-200">In-Browser AI</h4>
+          <p className="text-sm text-text-500">Powers topic matching & moderation</p>
+        </div>
         <span className={`w-2.5 h-2.5 rounded-full ${config.dot}`} />
       </div>
 
       <div className="flex items-center gap-2 text-sm">
-        <span className="text-text-500">Status:</span>
-        <span
-          className={`font-medium ${
-            status === 'ready'
-              ? 'text-emerald-400'
-              : status === 'error'
-                ? 'text-red-400'
-                : status === 'loading'
-                  ? 'text-amber-400'
-                  : 'text-text-500'
-          }`}
-        >
-          {config.label}
-        </span>
+          <span className="text-text-500">Status:</span>
+          <span
+            className={`font-medium ${
+              status === 'ready'
+                ? 'text-emerald-400'
+                : status === 'error'
+                  ? 'text-red-400'
+                  : status === 'loading'
+                    ? 'text-amber-400'
+                    : 'text-text-500'
+            }`}
+          >
+            {config.label}
+          </span>
+          {status === 'loading' && (
+            <span className="text-xs text-text-500 ml-auto">{progress}%</span>
+          )}
       </div>
 
       {status === 'loading' && (
@@ -121,43 +141,56 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
       )}
 
       {status === 'ready' && (
-        <div className="text-xs text-text-500 space-y-1">
-          <p>Model: {selectedModel} ({selectedModelInfo?.size})</p>
-          <p>Backend: {selectedModelInfo?.backend === 'webllm' ? 'WebLLM (WebGPU)' : 'ONNX Runtime WASM'}</p>
-          <p>Used for topic matching and semantic moderation.</p>
+        <div className="text-sm text-text-500 space-y-1">
+          <p><span className="text-text-400">Active:</span> {selectedModelInfo?.label} ({selectedModelInfo?.size})</p>
+          <p>Your posts are matched to topics and checked by AI entirely in this browser.</p>
         </div>
       )}
 
       {status === 'error' && (
-        <div className="text-xs text-red-400 space-y-1">
-          <p>Model failed to load. Keyword-based topic matching is active as a fallback.</p>
+        <div className="text-sm text-red-400 space-y-1">
+          <p>The AI model could not start. Falling back to keyword matching.</p>
           <p>Topic relevance and moderation checks may be less accurate.</p>
         </div>
       )}
 
       {status === 'unloaded' && (
-        <div className="text-xs text-text-500 space-y-1">
-          <p>The model loads on demand ({selectedModelInfo?.size} download).</p>
-          <p>Keyword matching is used until the model is ready.</p>
+        <div className="text-sm text-text-500 space-y-1">
+          <p>Load an AI model to enable smarter topic matching and moderation.</p>
+          <p>Until then, basic keyword matching is used.</p>
         </div>
       )}
 
       {status === 'ready' && (
-        <div className="space-y-2">
-          <h5 className="text-xs font-medium text-text-400 uppercase tracking-wider">Select Model</h5>
-          <div className="space-y-1">
+        <div className="space-y-3">
+          <div>
+            <h5 className="text-base font-medium text-text-200">Choose AI model</h5>
+            <p className="text-sm text-text-500 mt-0.5">Runs in your browser. Downloaded once.</p>
+          </div>
+          <div className="space-y-1.5">
             {availableModels.map((model) => (
               <button
                 key={model.id}
                 onClick={() => setModel(model.id)}
-                className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                className={`w-full text-left p-2.5 rounded-lg text-sm transition-colors border ${
                   selectedModel === model.id
-                    ? 'bg-sky-600/20 text-sky-400'
-                    : 'text-text-400 hover:bg-surface-lighter'
+                    ? 'bg-sky-600/15 border-sky-500/30 text-sky-400'
+                    : 'bg-surface-dark border-transparent text-text-300 hover:bg-surface-lighter'
                 }`}
               >
-                <div className="font-medium">{model.name}</div>
-                <div className="text-text-600">{model.size} · {model.backend === 'webllm' ? 'WebLLM' : 'Embeddings'}</div>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-semibold">{model.label}</div>
+                  {model.recommended && (
+                    <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-medium">
+                      Recommended
+                    </span>
+                  )}
+                </div>
+                <div className="text-text-500 mt-0.5">{model.description}</div>
+                <div className="flex items-center gap-2 mt-1.5 text-xs text-text-600">
+                  <span className="px-1.5 py-0.5 rounded bg-surface-lighter">{model.size}</span>
+                  <span>{model.name}</span>
+                </div>
               </button>
             ))}
           </div>
@@ -165,8 +198,8 @@ export default function LLMStatusIndicator({ compact }: { compact?: boolean }) {
       )}
 
       {(status === 'unloaded' || status === 'error') && (
-        <button onClick={loadModel} className="btn-primary text-xs w-full">
-          {status === 'error' ? 'Retry Loading Model' : 'Load AI Model'}
+        <button onClick={loadModel} className="btn-primary text-sm w-full">
+          {status === 'error' ? 'Retry Loading AI Model' : 'Load AI Model'}
         </button>
       )}
     </div>

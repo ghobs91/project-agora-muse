@@ -125,12 +125,22 @@ export async function loadWebLLM(modelId: string = 'gemma-2-2b-it-q4f16_1-MLC'):
   setWebLLMStatus('loading', 0);
 
   try {
-    const { CreateMLCEngine } = await import('@mlc-ai/web-llm');
+    const { CreateMLCEngine, prebuiltAppConfig } = await import('@mlc-ai/web-llm');
+
+    const appConfig = {
+      ...prebuiltAppConfig,
+      model_list: prebuiltAppConfig.model_list.map((record) =>
+          record.model_id === modelId
+          ? { ...record, overrides: { ...record.overrides, context_window_size: -1, attention_sink_size: 0 } }
+          : record,
+      ),
+    };
 
     engine = await CreateMLCEngine(modelId, {
       initProgressCallback: (progress) => {
         setWebLLMStatus('loading', Math.round(progress.progress * 100));
       },
+      appConfig,
     });
 
     setWebLLMStatus('ready', 100);

@@ -207,8 +207,11 @@ export interface LLMState {
 export interface ModelOption {
   id: string;
   name: string;
+  label: string;
+  description: string;
   size: string;
   backend: 'embeddings' | 'webllm';
+  recommended?: boolean;
 }
 
 // ─── Thread / Comments ──────────────────────────────────────────────

@@ -23,11 +23,57 @@ import {
 } from '@/lib/llm/web-llm';
 
 const AVAILABLE_MODELS: ModelOption[] = [
-  { id: 'gemma-2-2b-it-q4f16_1-MLC', name: 'Gemma 2 2B IT', size: '~1.9GB', backend: 'webllm' },
-  { id: 'gemma3-1b-it-q4f16_1-MLC', name: 'Gemma 3 1B IT', size: '~0.7GB', backend: 'webllm' },
-  { id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', name: 'SmolLM2 360M', size: '~0.4GB', backend: 'webllm' },
-  { id: 'Xenova/all-MiniLM-L6-v2', name: 'all-MiniLM-L6-v2', size: '~23MB', backend: 'embeddings' },
+  {
+    id: 'gemma-2-2b-it-q4f16_1-MLC',
+    name: 'Gemma 2 2B IT',
+    label: 'High quality',
+    description: 'Best topic matching and smartest moderation. Heavier download.',
+    size: '~1.9GB',
+    backend: 'webllm',
+  },
+  {
+    id: 'gemma3-1b-it-q4f16_1-MLC',
+    name: 'Gemma 3 1B IT',
+    label: 'Balanced',
+    description: 'Good accuracy with a smaller download.',
+    size: '~0.7GB',
+    backend: 'webllm',
+    recommended: true,
+  },
+  {
+    id: 'SmolLM2-360M-Instruct-q4f16_1-MLC',
+    name: 'SmolLM2 360M',
+    label: 'Lightweight',
+    description: 'Fastest to load. Fine for basic topic matching.',
+    size: '~0.4GB',
+    backend: 'webllm',
+  },
+  {
+    id: 'Xenova/all-MiniLM-L6-v2',
+    name: 'all-MiniLM-L6-v2',
+    label: 'Text matching only',
+    description: 'Tiny model that matches posts to topics by meaning. No chat features.',
+    size: '~23MB',
+    backend: 'embeddings',
+  },
 ];
+
+function getInitialModel(): string {
+  if (typeof window === 'undefined') return getDefaultModelForDevice();
+  try {
+    const persisted = localStorage.getItem('agora-muse-llm-model');
+    if (persisted && AVAILABLE_MODELS.some((m) => m.id === persisted)) {
+      return persisted;
+    }
+  } catch { /* localStorage unavailable */ }
+  return getDefaultModelForDevice();
+}
+
+function persistModel(modelId: string) {
+  try {
+    localStorage.setItem('agora-muse-llm-model', modelId);
+  } catch { /* localStorage unavailable */ }
+}
 
 function getInitialStatus(): { status: LLMStatus; progress: number } {
   const defaultModelId = getDefaultModelForDevice();
@@ -72,7 +118,7 @@ export const useLLMStore = create<LLMStore>((set, get) => {
     status: initial.status,
     progress: initial.progress,
     error: null,
-    selectedModel: getDefaultModelForDevice(),
+    selectedModel: getInitialModel(),
     availableModels: AVAILABLE_MODELS,
 
     loadModel: async () => {
@@ -110,6 +156,7 @@ export const useLLMStore = create<LLMStore>((set, get) => {
       const newModel = AVAILABLE_MODELS.find((m) => m.id === modelId);
       if (!newModel) return;
 
+      persistModel(modelId);
       set({ status: 'unloaded', progress: 0, error: null, selectedModel: modelId });
 
       // Embedding model always loads; WebLLM requires WebGPU
