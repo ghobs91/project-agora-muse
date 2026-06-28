@@ -92,8 +92,10 @@ async function cacheFirst(request) {
   try {
     const response = await fetch(request);
     if (response.ok) {
-      const cache = await caches.open(DYNAMIC_CACHE);
-      cache.put(request, response.clone());
+      try {
+        const cache = await caches.open(DYNAMIC_CACHE);
+        cache.put(request, response.clone());
+      } catch {}
     }
     return response;
   } catch {
@@ -105,8 +107,12 @@ async function networkFirst(request) {
   try {
     const response = await fetch(request);
     if (response.ok) {
-      const cache = await caches.open(DYNAMIC_CACHE);
-      cache.put(request, response.clone());
+      // Attempt to cache, but don't break the page if the body was already
+      // consumed (streaming RSC responses in dev mode are single-use).
+      try {
+        const cache = await caches.open(DYNAMIC_CACHE);
+        cache.put(request, response.clone());
+      } catch {}
     }
     return response;
   } catch (err) {
@@ -125,8 +131,9 @@ async function staleWhileRevalidate(request) {
 
   const fetchPromise = fetch(request).then((response) => {
     if (response.ok) {
+      // Attempt to cache, non-fatal if clone fails (streaming response).
       caches.open(DYNAMIC_CACHE).then((cache) => {
-        cache.put(request, response.clone());
+        try { cache.put(request, response.clone()); } catch {}
       });
     }
     return response;
@@ -136,13 +143,14 @@ async function staleWhileRevalidate(request) {
 }
 
 async function navigationFallback(request) {
+  // Don't cache navigation (HTML) responses — in Next.js dev mode they
+  // contain streaming RSC payloads whose body can only be consumed once.
+  // Attempting response.clone() after the browser has started reading the
+  // body causes "Failed to execute 'clone' on 'Response': Response body is
+  // already used", which cascades into RSC chunk loading failures and a
+  // full hydration crash.
   try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(DYNAMIC_CACHE);
-      cache.put(request, response.clone());
-    }
-    return response;
+    return await fetch(request);
   } catch {
     return caches.match('/offline');
   }

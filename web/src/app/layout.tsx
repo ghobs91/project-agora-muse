@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import PwaRegistrator from '@/components/pwa/PwaRegistrator';
+import PwaInstallOverlay from '@/components/pwa/PwaInstallOverlay';
 import AutoLoadLLM from '@/components/llm/AutoLoadLLM';
 import MobileDock from '@/components/layout/MobileDock';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
@@ -58,6 +59,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-surface-dark">
         <ThemeProvider>
           <PwaRegistrator />
+          <PwaInstallOverlay />
           <AutoLoadLLM />
           <div className="pb-40 lg:pb-0">
             {children}
