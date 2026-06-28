@@ -12,6 +12,7 @@ export const LEXICONS = {
   moderationRule: 'app.agora.moderationRule',
   hiddenPost: 'app.agora.hiddenPost',
   customTopic: 'app.agora.customTopic',
+  topicCustomization: 'app.agora.topicCustomization',
 } as const;
 
 // ─── Record Types ────────────────────────────────────────────────────
@@ -47,12 +48,29 @@ export interface CustomTopicRecord {
   createdAt: string; // ISO date
 }
 
+export interface TopicCustomizationRecord {
+  $type: 'app.agora.topicCustomization';
+  topicId: string;
+  removedSeedTerms: string[];
+  addedSeedTerms: string[];
+  removedFeedUris: string[];
+  addedFeeds: Array<{
+    uri: string;
+    displayName: string;
+    description?: string;
+    avatar?: string;
+    likeCount?: number;
+  }>;
+  updatedAt: string; // ISO date
+}
+
 /** Union of all Agora record types */
 export type AgoraMuseRecord =
   | TopicFollowRecord
   | ModerationRuleRecord
   | HiddenPostRecord
-  | CustomTopicRecord;
+  | CustomTopicRecord
+  | TopicCustomizationRecord;
 
 // ─── Record Keys (used for com.atproto.repo.putRecord rkey) ──────────
 
@@ -76,6 +94,11 @@ export function hiddenPostKey(postUri: string): string {
 /** Generate a record key for a custom topic */
 export function customTopicKey(topicId: string): string {
   return `custom-${topicId.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
+}
+
+/** Generate a deterministic record key for a topic customization */
+export function topicCustomizationKey(topicId: string): string {
+  return `topiccustom-${topicId.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────

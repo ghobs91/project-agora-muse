@@ -10,6 +10,7 @@ import type {
   TopicFollowRecord as UITopicFollowRecord,
   ModerationRuleRecord as UIModerationRuleRecord,
   HiddenPostRecord as UIHiddenPostRecord,
+  TopicCustomizationRecord as UITopicCustomizationRecord,
 } from '@/types';
 import {
   LEXICONS,
@@ -17,10 +18,12 @@ import {
   type ModerationRuleRecord,
   type HiddenPostRecord,
   type CustomTopicRecord,
+  type TopicCustomizationRecord,
   topicFollowKey,
   moderationRuleKey,
   hiddenPostKey,
   customTopicKey,
+  topicCustomizationKey,
 } from '@/lib/lexicon/types';
 
 // ─── Topic Follows ───────────────────────────────────────────────────
@@ -216,6 +219,61 @@ export async function deleteCustomTopic(
     repo: agent.assertDid ?? '',
     collection: LEXICONS.customTopic,
     rkey: customTopicKey(topicId),
+  });
+}
+
+// ─── Topic Customizations ────────────────────────────────────────────
+
+export async function getTopicCustomizations(
+  agent: Agent,
+): Promise<UITopicCustomizationRecord[]> {
+  try {
+    const response = await agent.com.atproto.repo.listRecords({
+      repo: agent.assertDid ?? '',
+      collection: LEXICONS.topicCustomization,
+    });
+    return (response.data.records || []).map((r) => {
+      const v = r.value as TopicCustomizationRecord;
+      return {
+        topicId: v.topicId,
+        removedSeedTerms: v.removedSeedTerms ?? [],
+        addedSeedTerms: v.addedSeedTerms ?? [],
+        removedFeedUris: v.removedFeedUris ?? [],
+        addedFeeds: v.addedFeeds ?? [],
+        updatedAt: v.updatedAt,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveTopicCustomization(
+  agent: Agent,
+  customization: Omit<TopicCustomizationRecord, '$type' | 'updatedAt'>,
+): Promise<void> {
+  const record: TopicCustomizationRecord = {
+    $type: LEXICONS.topicCustomization,
+    ...customization,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await agent.com.atproto.repo.putRecord({
+    repo: agent.assertDid ?? '',
+    collection: LEXICONS.topicCustomization,
+    rkey: topicCustomizationKey(customization.topicId),
+    record: record as unknown as Record<string, unknown>,
+  });
+}
+
+export async function deleteTopicCustomization(
+  agent: Agent,
+  topicId: string,
+): Promise<void> {
+  await agent.com.atproto.repo.deleteRecord({
+    repo: agent.assertDid ?? '',
+    collection: LEXICONS.topicCustomization,
+    rkey: topicCustomizationKey(topicId),
   });
 }
 

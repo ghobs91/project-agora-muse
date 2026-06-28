@@ -242,10 +242,19 @@ export async function scoreTopicMatch(
 /**
  * Score multiple posts against a single topic, computing topic-level
  * embeddings once and reusing them across all posts.
+ *
+ * @param postTexts - The text content of each post to score.
+ * @param topic - The topic to match against.
+ * @param precomputedEmbeddings - Optional pre-computed embeddings for
+ *   each post text (same order as postTexts). When provided, the ONNX
+ *   call for post embedding is skipped entirely — the caller batches
+ *   embeddings across multiple topics for a single ONNX call instead
+ *   of N per-topic calls.
  */
 export async function batchScoreTopicMatch(
   postTexts: string[],
   topic: Topic,
+  precomputedEmbeddings?: Array<Float32Array | null>,
 ): Promise<number[]> {
   if (postTexts.length === 0) return [];
 
@@ -284,9 +293,9 @@ export async function batchScoreTopicMatch(
     }
   }
 
-  // 3. Compute all post embeddings in one batch call
-  let postEmbeddings: Array<Float32Array | null> = [];
-  if (topicEmbedding) {
+  // 3. Compute all post embeddings in one batch call (or reuse pre-computed)
+  let postEmbeddings: Array<Float32Array | null> = precomputedEmbeddings ?? [];
+  if (!precomputedEmbeddings && topicEmbedding) {
     postEmbeddings = await getBatchEmbeddingsForTexts(postTexts);
   }
 
@@ -399,6 +408,49 @@ function keywordMatch(text: string, rule: string): boolean {
 // ─── Feed Generator Matching ─────────────────────────────────────────
 
 /**
+ * Check whether a feed's name or description contains any of the topic's
+ * identifying terms.  Short terms (≤3 chars) require a word boundary so "AI"
+ * doesn't match "pain"; longer terms use substring matching so "tech" matches
+ * "technology" and "tech news".
+ */
+function hasKeywordMatch(feed: FeedGenerator, topic: Topic): boolean {
+  const text = `${feed.displayName} ${feed.description || ''}`.toLowerCase();
+  const terms = [...new Set([topic.name.toLowerCase(), ...topic.seedTerms.map((s) => s.toLowerCase())])]
+    .filter((t) => t.length > 1);
+
+  return terms.some((term) => {
+    if (term.length <= 3) {
+      // Whole-word match for short terms
+      return new RegExp(`\\b${term}\\b`, 'i').test(text);
+    }
+    return text.includes(term);
+  });
+}
+
+/**
+ * Combine semantic relevance, keyword matching, and popularity (likeCount)
+ * for feed ranking.
+ *
+ * Pure semantic scoring was missing obvious matches like "Tech by Flipboard"
+ * because the embedding model focused on the literal topic text.  Keyword
+ * matches get a strong multiplicative boost, and likes provide a secondary
+ * multiplier so popular, relevant feeds rise to the top.
+ */
+function scoreFeed(
+  semanticScore: number,
+  feed: FeedGenerator,
+  topic: Topic,
+): number {
+  const keywordBoost = hasKeywordMatch(feed, topic) ? 1.5 : 1.0;
+  const likes = Math.max(0, feed.likeCount ?? 0);
+  // log10(1)=0, log10(10)=1, log10(100)=2, log10(1000)=3, log10(10000)=4
+  // A coefficient of 0.5 gives 10k likes a 3.0x boost so popular feeds
+  // outrank semantically-similar but obscure alternatives.
+  const popularityBoost = 1 + Math.log10(likes + 1) * 0.5;
+  return semanticScore * keywordBoost * popularityBoost;
+}
+
+/**
  * Match feed generators to a topic using LLM semantic similarity.
  * Returns feeds that are relevant to the topic, sorted by relevance.
  */
@@ -407,23 +459,20 @@ export async function matchFeedsToTopic(
   topic: Topic,
 ): Promise<FeedGenerator[]> {
   if (!embeddingPipeline || feeds.length === 0) {
-    // No LLM available — do keyword matching as fallback
-    return feeds.filter((f) => {
-      const text = `${f.displayName} ${f.description || ''}`.toLowerCase();
-      // Match against the topic name and seed terms as phrases rather than
-      // splitting them into individual words. This prevents broad matches like
-      // "open" or "source" for the "open source" topic.
-      const topicWords = [...new Set([
-        topic.name.toLowerCase(),
-        ...topic.seedTerms.map((s) => s.toLowerCase()),
-      ])];
-      return topicWords.some((w) => w.length > 2 && text.includes(w));
-    }).slice(0, 5);
+    // No LLM available — do keyword matching as fallback.
+    // Sort by popularity (descending) so popular feeds come first.
+    const matched = feeds.filter((f) => hasKeywordMatch(f, topic));
+    matched.sort((a, b) => (b.likeCount ?? 0) - (a.likeCount ?? 0));
+    return matched.slice(0, 5);
   }
 
   const topicText = `${topic.name}. ${topic.description}. ${topic.seedTerms.join(' ')}`;
   const topicEmbedding = await getEmbedding(topicText);
-  if (!topicEmbedding) return feeds.slice(0, 5);
+  if (!topicEmbedding) {
+    // Embedding failed — fall through to popularity sort
+    const sorted = [...feeds].sort((a, b) => (b.likeCount ?? 0) - (a.likeCount ?? 0));
+    return sorted.slice(0, 5);
+  }
 
   const scored = await Promise.all(
     feeds.map(async (f) => {
@@ -431,13 +480,14 @@ export async function matchFeedsToTopic(
       const feedEmbedding = await getEmbedding(feedText);
       if (!feedEmbedding) return { feed: f, score: 0 };
 
-      const score = cosineSimilarity(topicEmbedding!, feedEmbedding);
+      const semanticScore = cosineSimilarity(topicEmbedding!, feedEmbedding);
+      const score = scoreFeed(semanticScore, f, topic);
       return { feed: f, score };
     }),
   );
 
   return scored
-    .filter((s) => s.score > 0.15) // Minimum semantic relevance
+    .filter((s) => s.score > 0.15) // Minimum relevance
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
     .map((s) => s.feed);

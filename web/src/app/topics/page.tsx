@@ -1,25 +1,35 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import { Icon } from '@iconify/react';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useTopicStore } from '@/lib/store/topic-store';
+import { useTopicFeedStore } from '@/lib/store/topic-feed-store';
 import { useLLMStore } from '@/lib/store/llm-store';
+import * as feeds from '@/lib/atproto/feeds';
 import Header from '@/components/layout/Header';
 import TopicFollowButton from '@/components/topics/TopicFollowButton';
 import TopicIcon from '@/components/topics/TopicIcon';
 import { isStaticTopicId } from '@/lib/data/topics';
-import type { Topic } from '@/types';
+import { matchFeedsToTopic } from '@/lib/llm/topic-matcher';
+import type { Topic, FeedGenerator } from '@/types';
 
 export default function TopicsPage() {
-  const { isAuthenticated, restoreSession, loading: authLoading } = useAuthStore();
+  const { isAuthenticated, agent, restoreSession, loading: authLoading } = useAuthStore();
   const { topics, followedTopicIds, loadFollowedTopics, loadPopularTopics, hydrateCustomTopics, addCustomTopic, removeCustomTopic } = useTopicStore();
+  const { addFeedForTopic } = useTopicFeedStore();
   const { status: llmStatus } = useLLMStore();
 
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [feedSuggestions, setFeedSuggestions] = useState<FeedGenerator[]>([]);
+  const [feedSuggestLoading, setFeedSuggestLoading] = useState(false);
+  const [selectedFeed, setSelectedFeed] = useState<FeedGenerator | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     restoreSession();
@@ -33,6 +43,40 @@ export default function TopicsPage() {
     }
   }, [isAuthenticated, hydrateCustomTopics, loadFollowedTopics, loadPopularTopics]);
 
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    const query = newName.trim();
+    if (!query || !agent || query.length < 2) {
+      setFeedSuggestions([]);
+      setFeedSuggestLoading(false);
+      return;
+    }
+    // Don't show suggestions when a feed has already been selected
+    if (selectedFeed) return;
+
+    setFeedSuggestLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await feeds.searchFeedGenerators(agent, query, 7);
+        setFeedSuggestions(results);
+      } catch {
+        setFeedSuggestions([]);
+      } finally {
+        setFeedSuggestLoading(false);
+      }
+    }, 300);
+    debounceRef.current = timer;
+    return () => clearTimeout(timer);
+  }, [newName, agent, selectedFeed]);
+
+  const selectSuggestedFeed = useCallback((feed: FeedGenerator) => {
+    setSelectedFeed(feed);
+    setNewName(feed.displayName);
+    setFeedSuggestions([]);
+    setShowSuggestions(false);
+  }, []);
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = newName.trim();
@@ -41,11 +85,43 @@ export default function TopicsPage() {
     setCreating(true);
     setCreateError(null);
     try {
-      await addCustomTopic(name, newDesc.trim());
+      const topic = await addCustomTopic(name, newDesc.trim());
+      if (topic && selectedFeed && agent) {
+        addFeedForTopic(topic.id, selectedFeed);
+        try {
+          const queries = [topic.name, ...topic.seedTerms.slice(0, 3)]
+            .map((q) => q.trim())
+            .filter((q) => q.length > 0);
+          const uniqueQueries = [...new Set(queries)];
+          const resultsPerQuery = await Promise.all(
+            uniqueQueries.map((q) =>
+              feeds.searchFeedGenerators(agent, q, 20).catch(() => [] as FeedGenerator[]),
+            ),
+          );
+          const seen = new Set<string>([selectedFeed.uri]);
+          const candidates: FeedGenerator[] = [];
+          for (const batch of resultsPerQuery) {
+            for (const f of batch) {
+              if (!seen.has(f.uri)) {
+                seen.add(f.uri);
+                candidates.push(f);
+              }
+            }
+          }
+          const matched = await matchFeedsToTopic(candidates, topic);
+          for (const f of matched.slice(0, 4)) {
+            addFeedForTopic(topic.id, f);
+          }
+        } catch {
+          // Non-critical: feed discovery is best-effort
+        }
+      }
       setNewName('');
       setNewDesc('');
+      setSelectedFeed(null);
+      setFeedSuggestions([]);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Failed to create topic');
+      setCreateError(err instanceof Error ? err.message : 'Failed to follow topic');
     } finally {
       setCreating(false);
     }
@@ -83,39 +159,106 @@ export default function TopicsPage() {
       <main className="max-w-3xl mx-auto px-4 py-6">
         <h1 className="text-2xl font-bold text-text-100 mb-6">Topics</h1>
 
-        {/* Custom topic creation */}
-        <section className="card mb-8">
-          <h2 className="section-label mb-3">Create Custom Topic</h2>
+        {/* Follow a topic */}
+        <section className="card mb-8 overflow-visible">
+          <h2 className="section-label mb-3">Follow a Topic</h2>
           {llmStatus === 'loading' ? (
             <p className="text-xs text-sky-400 mb-3 animate-pulse">
               Loading AI engine for seed term generation...
             </p>
           ) : llmStatus === 'error' ? (
-            <p className="text-xs text-red-400 mb-3">
-              AI engine failed to load. Try refreshing.
+            <p className="text-xs text-amber-400 mb-3">
+              AI engine unavailable. Topics will be created with basic keyword matching.
             </p>
           ) : (
             <p className="text-xs text-text-500 mb-3">
-              Name a topic and we&apos;ll use AI to find related terms and the best Bluesky feeds for it.
+              Name a topic and we&apos;ll find related terms and the best Bluesky feeds.
+              {agent && ' Select a suggested feed from the dropdown for instant curation.'}
             </p>
           )}
-          <form onSubmit={handleCreate} className="space-y-3">
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Topic name (e.g. 'Sailing')"
-                className="flex-1 input-dark"
-                maxLength={60}
-                required
-              />
+          <form ref={formRef} onSubmit={handleCreate} className="space-y-3">
+            <div className="relative flex gap-3">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => {
+                    setNewName(e.target.value);
+                    setSelectedFeed(null);
+                    setShowSuggestions(true);
+                  }}
+                  onFocus={() => {
+                    if (feedSuggestions.length > 0) setShowSuggestions(true);
+                  }}
+                  onBlur={() => {
+                    setTimeout(() => setShowSuggestions(false), 200);
+                  }}
+                  placeholder="Topic name (e.g. 'Sailing')"
+                  className="w-full input-dark"
+                  maxLength={60}
+                  required
+                />
+                {selectedFeed && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFeed(null);
+                        setFeedSuggestions([]);
+                      }}
+                      className="text-text-600 hover:text-red-400 transition-colors"
+                      title="Clear selected feed"
+                    >
+                      <Icon icon="lucide:x" className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+                {/* Feed suggestion dropdown */}
+                {showSuggestions && (feedSuggestions.length > 0 || feedSuggestLoading) && (
+                  <div className="absolute top-full mt-1 left-0 w-full max-h-60 overflow-y-auto rounded bg-surface border border-dark-700 shadow-lg z-[60]">
+                    {feedSuggestLoading ? (
+                      <div className="flex items-center justify-center py-4">
+                        <div className="w-5 h-5 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin" />
+                      </div>
+                    ) : (
+                      feedSuggestions.map((result) => (
+                        <button
+                          key={result.uri}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectSuggestedFeed(result);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-lighter transition-colors"
+                        >
+                          {result.avatar ? (
+                            <img src={result.avatar} alt="" className="w-5 h-5 rounded-full shrink-0" />
+                          ) : (
+                            <div className="w-5 h-5 rounded-full bg-surface-lighter shrink-0" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="text-text-200 truncate">{result.displayName}</div>
+                            {result.description && (
+                              <div className="text-text-600 text-xs truncate">{result.description}</div>
+                            )}
+                          </div>
+                          {result.likeCount != null && result.likeCount > 0 && (
+                            <span className="text-text-600 text-xs shrink-0">
+                              {result.likeCount.toLocaleString()} likes
+                            </span>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 type="submit"
-                disabled={creating || !newName.trim() || llmStatus !== 'ready'}
-                className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
+                disabled={creating || !newName.trim()}
+                className="btn-primary text-sm px-4 py-2 disabled:opacity-50 shrink-0"
               >
-                {creating ? 'Creating...' : 'Create'}
+                {creating ? 'Following...' : 'Follow'}
               </button>
             </div>
             <input
@@ -126,6 +269,12 @@ export default function TopicsPage() {
               className="input-dark w-full"
               maxLength={200}
             />
+            {selectedFeed && (
+              <div className="flex items-center gap-2 text-xs text-sky-400">
+                <Icon icon="lucide:check-circle" className="w-3.5 h-3.5" />
+                <span>Using <strong>{selectedFeed.displayName}</strong> as the primary feed for this topic.</span>
+              </div>
+            )}
             {createError && (
               <p className="text-xs text-red-400">{createError}</p>
             )}
@@ -203,7 +352,7 @@ function TopicCard({
     <div className="card flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          <TopicIcon topicId={topic.id} className="text-base shrink-0" seedTerms={topic.seedTerms} iconUrl={topic.iconUrl} />
+          <TopicIcon topicId={topic.id} className="text-[2rem] shrink-0" seedTerms={topic.seedTerms} iconUrl={topic.iconUrl} />
           {linkable ? (
             <Link href={href} className="font-medium text-sm text-text-200 hover:text-sky-400 transition-colors">
               {topic.name}

@@ -9,7 +9,7 @@ import { useTopicFeedStore } from '@/lib/store/topic-feed-store';
 import { useFeedStore } from '@/lib/store/feed-store';
 import * as feeds from '@/lib/atproto/feeds';
 import { batchScoreTopicMatch } from '@/lib/llm/topic-matcher';
-import type { EnrichedPost, FeedGenerator } from '@/types';
+import type { EnrichedPost, FeedGenerator, TopicCustomizationRecord } from '@/types';
 import Header from '@/components/layout/Header';
 import PostCard from '@/components/feed/PostCard';
 import TopicFollowButton from '@/components/topics/TopicFollowButton';
@@ -48,7 +48,7 @@ function feedUriToBlueskyUrl(uri: string): string {
 export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   const { isAuthenticated, agent, restoreSession, loading: authLoading } = useAuthStore();
   const { topics } = useTopicStore();
-  const { getFeedsForTopic, discoverFeedsForTopic, discovering } = useTopicFeedStore();
+  const { getFeedsForTopic, discoverFeedsForTopic, discovering, getCustomizationForTopic, loadTopicCustomizations, saveTopicCustomization } = useTopicFeedStore();
   const upvote = useFeedStore((s) => s.upvote);
   const downvote = useFeedStore((s) => s.downvote);
   const hiddenPostUris = useFeedStore((s) => s.hiddenPostUris);
@@ -58,25 +58,41 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   // includes this topic.  This also handles server-rendered refreshes
   // where the store hasn't hydrated custom/dynamic topics yet.
   const topic = topics.find((t) => t.id === topicId) ?? DEFAULT_TOPICS.find((t) => t.id === topicId);
+  const customization = getCustomizationForTopic(topicId);
 
   const [posts, setPosts] = useState<EnrichedPost[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [displayCount, setDisplayCount] = useState(15);
   const [mounted, setMounted] = useState(false);
-  const [removedTerms, setRemovedTerms] = useState<Set<string>>(new Set());
-  const [addedTerms, setAddedTerms] = useState<string[]>([]);
+  const [removedTerms, setRemovedTerms] = useState<Set<string>>(new Set(customization?.removedSeedTerms ?? []));
+  const [addedTerms, setAddedTerms] = useState<string[]>(customization?.addedSeedTerms ?? []);
   const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(new Set());
   const [pendingAdditions, setPendingAdditions] = useState<string[]>([]);
   const [showAddTerm, setShowAddTerm] = useState(false);
   const [newTerm, setNewTerm] = useState('');
-  const hasPendingChanges = pendingRemovals.size > 0 || pendingAdditions.length > 0;
+  // Feed curation state
+  const [removedFeedUris, setRemovedFeedUris] = useState<Set<string>>(new Set(customization?.removedFeedUris ?? []));
+  const [addedFeeds, setAddedFeeds] = useState<FeedGenerator[]>(customization?.addedFeeds ?? []);
+  const [pendingFeedRemovals, setPendingFeedRemovals] = useState<Set<string>>(new Set());
+  const [pendingFeedAdditions, setPendingFeedAdditions] = useState<FeedGenerator[]>([]);
+  const [showAddFeed, setShowAddFeed] = useState(false);
+  const [feedSearchQuery, setFeedSearchQuery] = useState('');
+  const [feedSearchResults, setFeedSearchResults] = useState<FeedGenerator[]>([]);
+  const [feedSearchLoading, setFeedSearchLoading] = useState(false);
+  const [feedsExpanded, setFeedsExpanded] = useState(false);
+  const [termsExpanded, setTermsExpanded] = useState(false);
+
+  const hasPendingChanges = pendingRemovals.size > 0 || pendingAdditions.length > 0
+    || pendingFeedRemovals.size > 0 || pendingFeedAdditions.length > 0;
   const observerRef = useRef<HTMLDivElement>(null);
   const cursorsRef = useRef<Map<string, string | null>>(new Map());
   const loadingMoreRef = useRef(false);
   const postsRef = useRef<EnrichedPost[]>([]);
   const loadedTopicIdRef = useRef<string | null>(null);
   const loadedTermsKeyRef = useRef<string>('');
+  const loadedFeedsKeyRef = useRef<string>('');
+  const loadingRef = useRef(false);
   postsRef.current = posts;
 
   useEffect(() => {
@@ -88,6 +104,22 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   }, [restoreSession]);
 
   useEffect(() => {
+    if (!isAuthenticated || !agent) return;
+    loadTopicCustomizations();
+  }, [isAuthenticated, agent, loadTopicCustomizations]);
+
+  useEffect(() => {
+    setRemovedTerms(new Set(customization?.removedSeedTerms ?? []));
+    setAddedTerms(customization?.addedSeedTerms ?? []);
+    setRemovedFeedUris(new Set(customization?.removedFeedUris ?? []));
+    setAddedFeeds(customization?.addedFeeds ?? []);
+    setPendingRemovals(new Set());
+    setPendingAdditions([]);
+    setPendingFeedRemovals(new Set());
+    setPendingFeedAdditions([]);
+  }, [customization]);
+
+  useEffect(() => {
     if (!isAuthenticated || !agent || !topic) return;
 
     // Build a key representing the current term selection. If it matches what
@@ -96,13 +128,31 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
     // discoverFeedsForTopic calls setTopicIcon), which would reset `posts`
     // and appear to "reload" the initial feed.
     const termsKey = [...removedTerms].sort().join(',') + '|' + [...addedTerms].sort().join(',');
+    const topicFeeds = getFeedsForTopic(topicId);
+    const feedsKey = topicFeeds.map(f => f.uri).sort().join(',');
     if (
       loadedTopicIdRef.current === topicId &&
       loadedTermsKeyRef.current === termsKey &&
-      postsRef.current.length > 0
+      loadedFeedsKeyRef.current === feedsKey &&
+      (loadingRef.current || postsRef.current.length > 0)
     ) {
       return;
     }
+
+    // Record what we're about to load BEFORE the async work starts.
+    // discoverFeedsForTopic calls setTopicIcon below, which updates the
+    // topic store and triggers a re-render with a new `topic` reference.
+    // Without these early assignments the effect would re-run (because
+    // `topic` changed), the guard would fail (because the refs were still
+    // null), and a second loadTopicFeed instance would start.  Two
+    // concurrent instances race: the second one's setPosts(allPosts)
+    // overwrites the first one's results, and resets any posts that
+    // loadMore appended in between — the user sees the feed reload from
+    // scratch instead of paginating.
+    loadedTopicIdRef.current = topicId;
+    loadedTermsKeyRef.current = termsKey;
+    loadedFeedsKeyRef.current = feedsKey;
+    loadingRef.current = true;
 
     const loadTopicFeed = async () => {
       setLoading(true);
@@ -115,7 +165,7 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         // Ensure feed metadata is up to date (fetch if missing, update seed terms/icon regardless)
         await discoverFeedsForTopic(topicId);
 
-        // Get associated feed generators for this topic
+        // Get associated feed generators for this topic, respecting removals/additions
         const topicFeeds = getFeedsForTopic(topicId);
 
         // Aggregate posts from discovered feeds, seed-term search, and hashtags.
@@ -155,12 +205,11 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         scoredPosts.sort((a, b) => b.score - a.score);
         allPosts = scoredPosts.map((s) => s.post);
         setPosts(allPosts);
-        loadedTopicIdRef.current = topicId;
-        loadedTermsKeyRef.current = termsKey;
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load posts');
       } finally {
         setLoading(false);
+        loadingRef.current = false;
       }
     };
 
@@ -486,6 +535,38 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   });
   const virtualItems = virtualizer.getVirtualItems();
 
+  // Compute active feed generators for this topic (store feeds minus removals plus additions)
+  const topicFeeds = getFeedsForTopic(topicId);
+  const activeFeeds = useMemo(() => {
+    return topicFeeds;
+  }, [topicFeeds]);
+
+  // Feed search debounce
+  useEffect(() => {
+    if (!showAddFeed || !feedSearchQuery.trim() || !agent) {
+      setFeedSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setFeedSearchLoading(true);
+      try {
+        const results = await feeds.searchFeedGenerators(agent, feedSearchQuery.trim(), 10);
+        const topicFeedsUris = new Set(getFeedsForTopic(topicId).map(f => f.uri));
+        const pendingUris = new Set(pendingFeedAdditions.map(f => f.uri));
+        const filtered = results.filter(f =>
+          !topicFeedsUris.has(f.uri) &&
+          !pendingUris.has(f.uri)
+        );
+        setFeedSearchResults(filtered);
+      } catch {
+        setFeedSearchResults([]);
+      } finally {
+        setFeedSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [feedSearchQuery, showAddFeed, agent, topicId, getFeedsForTopic, pendingFeedAdditions]);
+
   if (authLoading || !mounted) {
     return (
       <div className="min-h-screen bg-surface-dark">
@@ -508,69 +589,299 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
     );
   }
 
-  const topicFeeds = getFeedsForTopic(topicId);
-
   return (
     <div className="min-h-screen bg-surface-dark">
       <Header />
-      <main className="max-w-2xl mx-auto px-4 py-4">
-        <div className="card mb-4">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-3">
-                <h1 className="text-xl font-bold text-text-100">{topic.name}</h1>
-                {mounted && topicFeeds.length > 0 && (
-                  <div className="flex -space-x-2">
-                    {topicFeeds.slice(0, 5).map((feed) => (
-                      feed.avatar ? (
-                        <img
-                          key={feed.uri}
-                          src={feed.avatar}
-                          alt=""
-                          className="w-6 h-6 rounded-full border-2 border-surface-dark"
-                          title={feed.displayName}
-                        />
-                      ) : null
+      <main className="max-w-5xl mx-auto px-4 py-4">
+        <div className="flex flex-col lg:flex-row gap-4">
+          {/* Feed column — second on mobile, first (left) on desktop */}
+          <div className="flex-1 min-w-0 max-w-3xl order-2 lg:order-1">
+            {isLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="card animate-pulse">
+                    <div className="flex gap-3">
+                      <div className="w-8 h-8 rounded-full bg-surface-lighter" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 w-32 bg-surface-lighter rounded" />
+                        <div className="h-4 w-full bg-surface-lighter rounded" />
+                        <div className="h-4 w-3/4 bg-surface-lighter rounded" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : error ? (
+              <div className="card text-center">
+                <p className="text-red-400 text-sm">{error}</p>
+              </div>
+            ) : posts.length === 0 ? (
+              <div className="card text-center py-8">
+                <p className="text-sm text-text-500">
+                  No posts found for this topic yet.
+                </p>
+              </div>
+            ) : (
+              <div ref={parentRef}>
+                <div
+                  style={{
+                    height: `${virtualizer.getTotalSize()}px`,
+                    width: '100%',
+                    position: 'relative',
+                  }}
+                >
+                  {virtualItems.map((virtualRow) => {
+                    const post = visiblePosts[virtualRow.index];
+                    return (
+                      <div
+                        key={post.uri}
+                        data-index={virtualRow.index}
+                        ref={virtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        <div className="mb-2">
+                          <PostCard
+                            post={post}
+                            onUpvote={upvote}
+                            onDownvote={downvote}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {hasMore && <div ref={observerRef} className="h-4" />}
+                {!hasMore && posts.length > 0 && (
+                  <p className="text-center text-xs text-text-600 py-4">
+                    — End of feed —
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Topic info card — first on mobile (above feed), right side on desktop */}
+          <aside className="w-full lg:w-80 lg:shrink-0 order-1 lg:order-2">
+            <div className="lg:sticky lg:top-16">
+              <div className="card mb-4 lg:mb-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold text-text-100 truncate">{topic.name}</h1>
+                {mounted && activeFeeds.some((f) => f.avatar) && (
+                  <div className="flex -space-x-1.5 shrink-0">
+                    {activeFeeds.filter((f) => f.avatar).slice(0, 3).map((feed) => (
+                      <img
+                        key={feed.uri}
+                        src={feed.avatar}
+                        alt=""
+                        className="w-4 h-4 rounded-full ring-1 ring-surface"
+                        title={feed.displayName}
+                      />
                     ))}
                   </div>
                 )}
               </div>
               <p className="text-sm text-text-500 mt-1">{topic.description}</p>
-              {mounted && topicFeeds.length > 0 && (
+              {mounted && (
                 <div className="mt-3 pt-3 border-t border-dark-700">
-                  <p className="text-xs text-text-600 mb-2">
-                    Pulling from {topicFeeds.length} curated feed{topicFeeds.length !== 1 ? 's' : ''}:
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {topicFeeds.map((feed) => (
-                      <a
-                        key={feed.uri}
-                        href={feedUriToBlueskyUrl(feed.uri)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded text-sm bg-surface-lighter text-sky-400 hover:bg-sky-600/20 transition-colors"
-                        title={`Open ${feed.displayName} on Bluesky`}
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs text-text-600">
+                      {activeFeeds.length > 0
+                        ? `Curated feeds (${activeFeeds.length})`
+                        : 'No curated feeds configured. Search to add one:'}
+                    </p>
+                    {activeFeeds.length > 3 && (
+                      <button
+                        onClick={() => setFeedsExpanded(!feedsExpanded)}
+                        className="text-xs text-text-500 hover:text-sky-400 transition-colors flex items-center gap-0.5 shrink-0 whitespace-nowrap"
+                      >
+                        {feedsExpanded ? 'Show less' : `Show all`}
+                        <Icon icon={feedsExpanded ? 'lucide:chevron-up' : 'lucide:chevron-down'} className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                  <div className={`flex flex-wrap gap-1.5${!feedsExpanded ? ' max-h-[28px] overflow-hidden' : ''}`}>
+                    {activeFeeds.map((feed) => {
+                      const isPendingRemove = pendingFeedRemovals.has(feed.uri);
+                      const isAdded = addedFeeds.some(f => f.uri === feed.uri);
+                      return (
+                        <span
+                          key={feed.uri}
+                          className={`inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full text-xs group ${
+                            isPendingRemove
+                              ? 'bg-surface-lighter/50 text-text-600 line-through'
+                              : isAdded
+                                ? 'bg-sky-600/20 text-sky-400'
+                                : 'bg-surface-lighter text-sky-400 hover:bg-sky-600/20 transition-colors'
+                          }`}
+                        >
+                          {feed.avatar && (
+                            <img
+                              src={feed.avatar}
+                              alt=""
+                              className="w-3.5 h-3.5 rounded-full shrink-0"
+                            />
+                          )}
+                          <a
+                            href={feedUriToBlueskyUrl(feed.uri)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`Open ${feed.displayName} on Bluesky`}
+                            className="truncate min-w-0"
+                          >
+                            {feed.displayName}
+                          </a>
+                          {feed.autoPublished && (
+                            <span className="text-[10px] text-sky-500/60 shrink-0">(auto)</span>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isPendingRemove) {
+                                setPendingFeedRemovals((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(feed.uri);
+                                  return next;
+                                });
+                              } else {
+                                setPendingFeedRemovals((prev) => new Set(prev).add(feed.uri));
+                              }
+                            }}
+                            className={`shrink-0 ${
+                              isPendingRemove
+                                ? 'text-sky-400 hover:text-sky-300'
+                                : 'text-text-600 hover:text-red-400'
+                            } transition-colors`}
+                            title={isPendingRemove ? `Undo remove ${feed.displayName}` : `Remove ${feed.displayName}`}
+                          >
+                            <Icon icon="lucide:x" className="w-3 h-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+
+                    {/* Pending feed additions */}
+                    {pendingFeedAdditions.map((feed) => (
+                      <span
+                        key={`pending-feed-${feed.uri}`}
+                        className="inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full text-xs bg-sky-500/20 text-sky-300 group"
                       >
                         {feed.avatar && (
-                          <img
-                            src={feed.avatar}
-                            alt=""
-                            className="w-4 h-4 rounded-full"
-                          />
+                          <img src={feed.avatar} alt="" className="w-3.5 h-3.5 rounded-full shrink-0" />
                         )}
-                        <span>{feed.displayName}</span>
-                        {feed.autoPublished && (
-                          <span className="text-[10px] text-sky-500/60">(auto)</span>
-                        )}
-                        <Icon icon="lucide:external-link" className="w-3 h-3 text-text-500 shrink-0" />
-                      </a>
+                        <span className="truncate min-w-0">{feed.displayName}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingFeedAdditions((prev) => prev.filter((f) => f.uri !== feed.uri));
+                          }}
+                          className="shrink-0 text-sky-400/70 hover:text-red-400 transition-colors"
+                          title={`Remove ${feed.displayName}`}
+                        >
+                          <Icon icon="lucide:x" className="w-3 h-3" />
+                        </button>
+                      </span>
                     ))}
+
+                    {/* Add feed search button / input */}
+                    {showAddFeed ? (
+                      <div className="relative inline-flex flex-col">
+                        <form
+                          onSubmit={(e) => e.preventDefault()}
+                          className="inline-flex"
+                        >
+                          <input
+                            type="text"
+                            value={feedSearchQuery}
+                            onChange={(e) => setFeedSearchQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                setShowAddFeed(false);
+                                setFeedSearchQuery('');
+                                setFeedSearchResults([]);
+                              }
+                            }}
+                            placeholder="Search feeds..."
+                            className="w-40 px-2.5 py-1 rounded text-sm input-dark"
+                            autoFocus
+                          />
+                        </form>
+                        {/* Search results dropdown */}
+                        {(feedSearchResults.length > 0 || feedSearchLoading) && (
+                          <div className="absolute top-full mt-1 left-0 w-72 max-h-60 overflow-y-auto rounded bg-surface border border-dark-700 shadow-lg z-50">
+                            {feedSearchLoading ? (
+                              <div className="flex items-center justify-center py-4">
+                                <div className="w-5 h-5 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin" />
+                              </div>
+                            ) : (
+                              feedSearchResults.map((result) => (
+                                <button
+                                  key={result.uri}
+                                  onClick={() => {
+                                    const alreadyPending = pendingFeedAdditions.some(f => f.uri === result.uri);
+                                    if (!alreadyPending) {
+                                      setPendingFeedAdditions((prev) => [...prev, result]);
+                                    }
+                                    setFeedSearchQuery('');
+                                    setFeedSearchResults([]);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-lighter transition-colors"
+                                >
+                                  {result.avatar ? (
+                                    <img src={result.avatar} alt="" className="w-5 h-5 rounded-full shrink-0" />
+                                  ) : (
+                                    <div className="w-5 h-5 rounded-full bg-surface-lighter shrink-0" />
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-text-200 truncate">{result.displayName}</div>
+                                    {result.description && (
+                                      <div className="text-text-600 text-xs truncate">{result.description}</div>
+                                    )}
+                                  </div>
+                                  {result.likeCount != null && (
+                                    <span className="text-text-600 text-xs shrink-0">
+                                      {result.likeCount} ♥
+                                    </span>
+                                  )}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setShowAddFeed(true)}
+                        className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-surface-lighter text-text-500 hover:bg-surface-light hover:text-sky-400 transition-colors"
+                        title="Add curated feed"
+                      >
+                        <Icon icon="lucide:plus" className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
               <div className="mt-3 pt-3 border-t border-dark-700">
-                <p className="text-xs text-text-600 mb-2">Related topics:</p>
-                <div className="flex flex-wrap gap-1.5 items-center">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs text-text-600">Related topics</p>
+                  {topic.seedTerms.length > 5 && (
+                    <button
+                      onClick={() => setTermsExpanded(!termsExpanded)}
+                      className="text-xs text-text-500 hover:text-sky-400 transition-colors flex items-center gap-0.5 shrink-0 whitespace-nowrap"
+                    >
+                      {termsExpanded ? 'Show less' : `Show all`}
+                      <Icon icon={termsExpanded ? 'lucide:chevron-up' : 'lucide:chevron-down'} className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <div className={`flex flex-wrap gap-1.5${!termsExpanded ? ' max-h-[28px] overflow-hidden' : ''}`}>
                   {/* Original seed terms */}
                   {topic.seedTerms
                     .filter((term) => !removedTerms.has(term))
@@ -579,13 +890,13 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                       return (
                         <span
                           key={term}
-                          className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm group ${
+                          className={`inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full text-xs group ${
                             isPendingRemove
                               ? 'bg-surface-lighter/50 text-text-600 line-through'
                               : 'bg-surface-lighter text-text-500'
                           }`}
                         >
-                          {term}
+                          <span className="truncate min-w-0">{term}</span>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -599,11 +910,11 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                                 setPendingRemovals((prev) => new Set(prev).add(term));
                               }
                             }}
-                            className={
+                            className={`shrink-0 ${
                               isPendingRemove
-                                ? 'text-sky-400 hover:text-sky-300 transition-colors'
-                                : 'text-text-600 hover:text-red-400 transition-colors'
-                            }
+                                ? 'text-sky-400 hover:text-sky-300'
+                                : 'text-text-600 hover:text-red-400'
+                            } transition-colors`}
                             title={isPendingRemove ? `Undo remove ${term}` : `Remove ${term}`}
                           >
                             <Icon icon="lucide:x" className="w-3 h-3" />
@@ -618,15 +929,15 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                     .map((term) => (
                       <span
                         key={`added-${term}`}
-                        className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm bg-sky-600/20 text-sky-400 group"
+                        className="inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full text-xs bg-sky-600/20 text-sky-400 group"
                       >
-                        {term}
+                        <span className="truncate min-w-0">{term}</span>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             setPendingRemovals((prev) => new Set(prev).add(term));
                           }}
-                          className="text-sky-500/70 hover:text-red-400 transition-colors"
+                          className="shrink-0 text-sky-500/70 hover:text-red-400 transition-colors"
                           title={`Remove ${term}`}
                         >
                           <Icon icon="lucide:x" className="w-3 h-3" />
@@ -638,15 +949,15 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                   {pendingAdditions.map((term) => (
                     <span
                       key={`pending-${term}`}
-                      className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm bg-sky-500/20 text-sky-300 group"
+                      className="inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full text-xs bg-sky-500/20 text-sky-300 group"
                     >
-                      {term}
+                      <span className="truncate min-w-0">{term}</span>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           setPendingAdditions((prev) => prev.filter((t) => t !== term));
                         }}
-                        className="text-sky-400/70 hover:text-red-400 transition-colors"
+                        className="shrink-0 text-sky-400/70 hover:text-red-400 transition-colors"
                         title={`Remove ${term}`}
                       >
                         <Icon icon="lucide:x" className="w-3 h-3" />
@@ -683,36 +994,50 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                           }
                         }}
                         placeholder="Add term..."
-                        className="w-28 px-2.5 py-1 rounded-full text-sm input-dark"
+                        className="w-24 px-2.5 py-0.5 rounded-full text-xs input-dark"
                         autoFocus
                       />
                     </form>
                   ) : (
                     <button
                       onClick={() => setShowAddTerm(true)}
-                      className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-surface-lighter text-text-500 hover:bg-surface-light hover:text-sky-400 transition-colors"
+                      className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-surface-lighter text-text-500 hover:bg-surface-light hover:text-sky-400 transition-colors"
                       title="Add seed term"
                     >
-                      <Icon icon="lucide:plus" className="w-4 h-4" />
+                      <Icon icon="lucide:plus" className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
 
                 {hasPendingChanges && (
                   <button
-                    onClick={() => {
-                      setRemovedTerms((prev) => {
-                        const next = new Set(prev);
-                        pendingRemovals.forEach((t) => next.add(t));
-                        return next;
-                      });
-                      setAddedTerms((prev) => {
-                        const removalSet = pendingRemovals;
-                        const kept = prev.filter((t) => !removalSet.has(t));
-                        return [...kept, ...pendingAdditions];
-                      });
+                    onClick={async () => {
+                      if (!topic) return;
+
+                      // Merge pending changes into committed state
+                      const nextRemovedTerms = new Set([...removedTerms, ...pendingRemovals]);
+                      const nextAddedTerms = [...addedTerms.filter((t) => !pendingRemovals.has(t)), ...pendingAdditions];
+                      const nextRemovedFeedUris = new Set([...removedFeedUris, ...pendingFeedRemovals]);
+                      const nextAddedFeeds = [...addedFeeds.filter((f) => !pendingFeedRemovals.has(f.uri)), ...pendingFeedAdditions];
+
+                      setRemovedTerms(nextRemovedTerms);
+                      setAddedTerms(nextAddedTerms);
+                      setRemovedFeedUris(nextRemovedFeedUris);
+                      setAddedFeeds(nextAddedFeeds);
                       setPendingRemovals(new Set());
                       setPendingAdditions([]);
+                      setPendingFeedRemovals(new Set());
+                      setPendingFeedAdditions([]);
+
+                      const nextCustomization: TopicCustomizationRecord = {
+                        topicId,
+                        removedSeedTerms: [...nextRemovedTerms],
+                        addedSeedTerms: nextAddedTerms,
+                        removedFeedUris: [...nextRemovedFeedUris],
+                        addedFeeds: nextAddedFeeds,
+                        updatedAt: new Date().toISOString(),
+                      };
+                      await saveTopicCustomization(topicId, nextCustomization);
                     }}
                     className="mt-3 text-xs font-medium px-3 py-1.5 rounded-full bg-sky-600/20 text-sky-400 hover:bg-sky-600/30 transition-colors"
                   >
@@ -723,77 +1048,11 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
             </div>
             <TopicFollowButton topicId={topic.id} />
           </div>
-        </div>
-
-        {isLoading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="card animate-pulse">
-                <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-surface-lighter" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-3 w-32 bg-surface-lighter rounded" />
-                    <div className="h-4 w-full bg-surface-lighter rounded" />
-                    <div className="h-4 w-3/4 bg-surface-lighter rounded" />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : error ? (
-          <div className="card text-center">
-            <p className="text-red-400 text-sm">{error}</p>
-          </div>
-        ) : posts.length === 0 ? (
-          <div className="card text-center py-8">
-            <p className="text-sm text-text-500">
-              No posts found for this topic yet.
-            </p>
-          </div>
-        ) : (
-          <div ref={parentRef}>
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {virtualItems.map((virtualRow) => {
-                const post = visiblePosts[virtualRow.index];
-                return (
-                  <div
-                    key={post.uri}
-                    data-index={virtualRow.index}
-                    ref={virtualizer.measureElement}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <div className="mb-2">
-                      <PostCard
-                        post={post}
-                        onUpvote={upvote}
-                        onDownvote={downvote}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
             </div>
-            {hasMore && <div ref={observerRef} className="h-4" />}
-            {!hasMore && posts.length > 0 && (
-              <p className="text-center text-xs text-text-600 py-4">
-                — End of feed —
-              </p>
-            )}
           </div>
-        )}
-      </main>
+        </aside>
+      </div>
+    </main>
     </div>
   );
 }

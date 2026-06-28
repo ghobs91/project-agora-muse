@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import type { EnrichedPost, FeedSortMode, Topic } from '@/types';
+import type { EnrichedPost, FeedSortMode, Topic, TopicCustomizationRecord } from '@/types';
 import { useAuthStore } from './auth-store';
 import { useTopicStore } from './topic-store';
 import { useTopicFeedStore } from './topic-feed-store';
@@ -27,6 +27,19 @@ function setFeedCache(key: string, posts: EnrichedPost[]) {
 function setCursorCache(key: string, cursor: string | null) {
   if (feedCursors.size >= MAX_CURSOR_CACHE) feedCursors.clear();
   feedCursors.set(key, cursor);
+}
+
+function getEffectiveSeedTerms(
+  topic: Topic,
+  customizationsByTopic: Record<string, TopicCustomizationRecord>,
+): string[] {
+  const customization = customizationsByTopic[topic.id];
+  if (!customization) return topic.seedTerms;
+  const removed = new Set(customization.removedSeedTerms);
+  return [
+    ...topic.seedTerms.filter((t) => !removed.has(t)),
+    ...customization.addedSeedTerms,
+  ];
 }
 
 async function batchWithLimit<T, R>(
@@ -162,7 +175,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
         // Feed generator tasks
         for (const topicId of followedIds) {
-          const topicFeedList = topicFeedsState.feedsByTopic[topicId];
+          const topicFeedList = topicFeedsState.getFeedsForTopic(topicId);
           if (topicFeedList && topicFeedList.length > 0) {
             for (const feed of topicFeedList) {
               fetchTasks.push(async () => {
@@ -200,9 +213,10 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         // available — EXCEPT custom topics, where the auto-published Skyfeed
         // feed is supplemented with keyword search for more coverage).
         for (const topic of followedTopics) {
-          const hasFeeds = (topicFeedsState.feedsByTopic[topic.id]?.length ?? 0) > 0;
+          const hasFeeds = topicFeedsState.getFeedsForTopic(topic.id).length > 0;
+          const effectiveSeedTerms = getEffectiveSeedTerms(topic, topicFeedsState.customizationsByTopic);
           if (!hasFeeds || topic.isCustom) {
-            for (const term of topic.seedTerms.slice(0, 3)) {
+            for (const term of effectiveSeedTerms.slice(0, 3)) {
               fetchTasks.push(async () => {
                 const result = await feeds.searchPosts(agent, term, { limit: 5 });
                 setCursorCache(`search:${topic.id}:${term}`, result.cursor ?? null);
@@ -218,7 +232,8 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
         // Hashtag search tasks — limit to 1 per topic to avoid connection saturation
         for (const topic of followedTopics) {
-          const hashtag = '#' + topic.seedTerms[0].trim().toLowerCase().replace(/\s+/g, '');
+          const effectiveSeedTerms = getEffectiveSeedTerms(topic, topicFeedsState.customizationsByTopic);
+          const hashtag = '#' + effectiveSeedTerms[0].trim().toLowerCase().replace(/\s+/g, '');
           if (hashtag.length > 1) {
             fetchTasks.push(async () => {
               const result = await feeds.searchPosts(agent, hashtag, { limit: 5 });
@@ -243,7 +258,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         // Count feed-generator tasks (they come first in the fetchTasks array)
         let feedGenTaskCount = 0;
         for (const topicId of followedIds) {
-          const topicFeedList = topicFeedsState.feedsByTopic[topicId];
+          const topicFeedList = topicFeedsState.getFeedsForTopic(topicId);
           if (topicFeedList && topicFeedList.length > 0) {
             feedGenTaskCount += topicFeedList.length;
           }
@@ -331,12 +346,27 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
             list.push(post);
           }
 
+          // Compute all post embeddings in a single ONNX batch call —
+          // avoids redundant per-topic calls that re-embed the same posts
+          // N times for N topics. This was the dominant UI-freeze source.
+          const postIndexMap = new Map<EnrichedPost, number>();
+          for (let i = 0; i < allPosts.length; i++) {
+            postIndexMap.set(allPosts[i], i);
+          }
+          const allPostEmbeddings = await llm.getBatchEmbeddingsForTexts(
+            allPosts.map((p) => p.text),
+          );
+
           for (const [topicId, topicPosts] of postsByTopic) {
             const topic = allTopics.find((t) => t.id === topicId);
             if (!topic) continue;
+            const topicEmbeddings = topicPosts.map(
+              (p) => allPostEmbeddings[postIndexMap.get(p) ?? -1] ?? null,
+            );
             const scores = await llm.batchScoreTopicMatch(
               topicPosts.map((p) => p.text),
               topic,
+              topicEmbeddings,
             );
             for (let i = 0; i < topicPosts.length; i++) {
               topicPosts[i].matchedTopics = [{ topicId, score: scores[i] }];
@@ -416,8 +446,9 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
       if (followedIds.size > 0) {
         // Collect feed URIs with remaining cursors
         const feedsWithCursor: Array<{ topicId: string; feedUri: string }> = [];
+        const topicFeedsState = useTopicFeedStore.getState();
         for (const topicId of followedIds) {
-          const topicFeedList = useTopicFeedStore.getState().feedsByTopic[topicId];
+          const topicFeedList = topicFeedsState.getFeedsForTopic(topicId);
           if (!topicFeedList) continue;
           for (const feed of topicFeedList) {
             const cursor = feedCursors.get(feed.uri);
@@ -430,7 +461,8 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         const allTopics = useTopicStore.getState().topics;
         const followedTopics = allTopics.filter((t) => followedIds.has(t.id));
         for (const topic of followedTopics) {
-          for (const term of topic.seedTerms.slice(0, 3)) {
+          const effectiveSeedTerms = getEffectiveSeedTerms(topic, topicFeedsState.customizationsByTopic);
+          for (const term of effectiveSeedTerms.slice(0, 3)) {
             const cursor = feedCursors.get(`search:${topic.id}:${term}`);
             if (cursor) {
               feedsWithCursor.push({ topicId: topic.id, feedUri: `search:${topic.id}:${term}` });

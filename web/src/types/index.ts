@@ -120,6 +120,22 @@ export interface HiddenPostRecord {
   reason: 'downvote' | 'manual';
 }
 
+/** Record: app.agora.topicCustomization */
+export interface TopicCustomizationRecord {
+  topicId: string;
+  removedSeedTerms: string[];
+  addedSeedTerms: string[];
+  removedFeedUris: string[];
+  addedFeeds: Array<{
+    uri: string;
+    displayName: string;
+    description?: string;
+    avatar?: string;
+    likeCount?: number;
+  }>;
+  updatedAt: string;
+}
+
 // ─── Auth ────────────────────────────────────────────────────────────
 
 export interface AuthState {
