@@ -1,4 +1,4 @@
-# Agora Muse Project Overview
+# Agora Project Overview
 
 **Purpose:** A PWA that lets users follow topics (not accounts) over Bluesky. It aggregates Bluesky content and uses in-browser AI for topic matching, semantic moderation, and custom topic seed-term generation.
 

@@ -6,14 +6,14 @@ import MobileDock from '@/components/layout/MobileDock';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 
 export const metadata: Metadata = {
-  title: 'Agora Muse — Reddit over Bluesky',
+  title: 'Agora',
   description:
     'Follow topics, not communities. Intelligent aggregation of Bluesky content powered by in-browser AI.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Agora Muse',
+    title: 'Agora',
   },
   other: {
     'mobile-web-app-capable': 'yes',

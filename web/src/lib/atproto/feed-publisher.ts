@@ -106,7 +106,7 @@ export async function publishSkyfeedForTopic(
  * Delete the Skyfeed feed-generator record for a topic.
  *
  * Called when a user removes a custom topic so the Bluesky feed they
- * created through Agora Muse is cleaned up. Failures are non-fatal — the
+ * created through Agora is cleaned up. Failures are non-fatal — the
  * topic is already being removed locally.
  */
 export async function unpublishSkyfeedForTopic(

@@ -1,6 +1,6 @@
 {
   "client_id": "https://agora-muse.netlify.app/client-metadata.json",
-  "client_name": "Agora Muse",
+  "client_name": "Agora",
   "client_uri": "https://agora-muse.netlify.app",
   "redirect_uris": [
     "https://agora-muse.netlify.app/oauth/callback"

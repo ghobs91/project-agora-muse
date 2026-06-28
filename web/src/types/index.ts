@@ -1,6 +1,6 @@
 // ─── Bluesky / AT Protocol ───────────────────────────────────────────
 
-/** A Bluesky post (feed item) enriched with Agora Muse metadata */
+/** A Bluesky post (feed item) enriched with Agora metadata */
 export interface EnrichedPost {
   uri: string;
   cid: string;
@@ -81,7 +81,7 @@ export interface FeedGenerator {
     displayName?: string;
     avatar?: string;
   };
-  /** True when Agora Muse auto-published this feed via Skyfeed Builder */
+  /** True when Agora auto-published this feed via Skyfeed Builder */
   autoPublished?: boolean;
 }
 
@@ -137,7 +137,7 @@ export interface AuthState {
  * `skyfeedBuilder` field of an `app.bsky.feed.generator` record.
  * Served by `did:web:skyfeed.me` via the query-engine.
  *
- * Only the block variants Agora Muse constructs are modelled here.
+ * Only the block variants Agora constructs are modelled here.
  * See https://github.com/skyfeed-dev/query-engine for the full DSL.
  */
 export type SkyfeedBlock =

@@ -1,6 +1,6 @@
 {
-  "name": "Agora Muse — Reddit over Bluesky",
-  "short_name": "Agora Muse",
+  "name": "Agora",
+  "short_name": "Agora",
   "description": "Follow topics, not communities. Intelligent aggregation of Bluesky content powered by in-browser AI.",
   "start_url": "/?utm_source=pwa",
   "scope": "/",

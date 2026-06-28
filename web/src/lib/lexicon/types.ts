@@ -1,5 +1,5 @@
 /**
- * Custom AT Protocol Lexicon definitions for Agora Muse.
+ * Custom AT Protocol Lexicon definitions for Agora.
  *
  * These records are stored on the user's PDS using com.atproto.repo.*
  * endpoints. The NSID prefix is app.agora.*
@@ -47,7 +47,7 @@ export interface CustomTopicRecord {
   createdAt: string; // ISO date
 }
 
-/** Union of all Agora Muse record types */
+/** Union of all Agora record types */
 export type AgoraMuseRecord =
   | TopicFollowRecord
   | ModerationRuleRecord

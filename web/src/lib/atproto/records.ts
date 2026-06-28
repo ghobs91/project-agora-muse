@@ -1,5 +1,5 @@
 /**
- * PDS record CRUD operations for Agora Muse user preferences.
+ * PDS record CRUD operations for Agora user preferences.
  *
  * Stores topic follows, moderation rules, and hidden posts as
  * AT Protocol records on the user's PDS.

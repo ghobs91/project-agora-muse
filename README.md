@@ -1,4 +1,4 @@
-# Agora Muse
+# Agora
 
 **Topic-based content discovery over Bluesky.** Follow topics instead of accounts. All AI runs in your browser.
 

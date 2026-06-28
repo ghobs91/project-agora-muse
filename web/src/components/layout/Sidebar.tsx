@@ -35,7 +35,7 @@ function SidebarContent() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-text-200 truncate">{handle}</p>
-              <p className="text-xs text-text-500">Agora Muse</p>
+              <p className="text-xs text-text-500">Agora</p>
             </div>
           </div>
         </div>

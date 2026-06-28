@@ -1,4 +1,4 @@
-# Suggested Commands for Agora Muse
+# Suggested Commands for Agora
 
 ## Development
 - `cd web && npm run dev` — Start Next.js dev server

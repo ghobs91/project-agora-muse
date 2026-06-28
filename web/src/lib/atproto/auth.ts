@@ -1,5 +1,5 @@
 /**
- * AT Protocol OAuth client for Agora Muse.
+ * AT Protocol OAuth client for Agora.
  *
  * Handles Bluesky OAuth login/logout and session persistence.
  * Session is stored in localStorage for static-export compatibility.
@@ -85,7 +85,7 @@ function buildClientMetadata(): Record<string, unknown> | undefined {
       `${origin}/client-metadata.json`;
     return {
       client_id: clientId,
-      client_name: 'Agora Muse',
+      client_name: 'Agora',
       client_uri: process.env.NEXT_PUBLIC_OAUTH_CLIENT_URI || origin,
       redirect_uris: [
         process.env.NEXT_PUBLIC_OAUTH_REDIRECT_URI ||
@@ -128,7 +128,7 @@ function buildClientMetadata(): Record<string, unknown> | undefined {
 
     return {
       client_id: loopbackClientId,
-      client_name: 'Agora Muse',
+      client_name: 'Agora',
       redirect_uris: [redirectUri],
       scope: 'atproto transition:generic',
       grant_types: ['authorization_code', 'refresh_token'],
