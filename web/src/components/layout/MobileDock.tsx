@@ -32,7 +32,7 @@ export default function MobileDock() {
   );
 
   return (
-    <nav className="mobile-dock">
+    <nav className="mobile-dock lg:hidden">
       {/* Home — shows user avatar when available */}
       {btn(
         '/',
@@ -56,7 +56,7 @@ export default function MobileDock() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
           </svg>
         </div>,
-        'Create',
+        'Create Post',
       )}
 
       {/* Search — browse / create topics */}

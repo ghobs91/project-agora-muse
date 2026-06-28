@@ -89,14 +89,7 @@ function SidebarContent() {
 export default function Sidebar({ drawerOpen, onDrawerClose }: SidebarProps) {
   return (
     <>
-      {/* Inline for desktop */}
-      <aside className="w-60 shrink-0 hidden lg:block">
-        <div className="sticky top-16">
-          <SidebarContent />
-        </div>
-      </aside>
-
-      {/* Drawer for mobile */}
+      {/* Drawer for mobile — desktop sidebar is in the root layout */}
       {drawerOpen !== undefined && (
         <>
           {drawerOpen && (

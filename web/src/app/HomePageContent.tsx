@@ -1,24 +1,28 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import { Icon } from '@iconify/react';
 import type { ReactNode } from 'react';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useTopicStore } from '@/lib/store/topic-store';
+import { useTopicFeedStore } from '@/lib/store/topic-feed-store';
+import { useModerationStore } from '@/lib/store/moderation-store';
 import * as auth from '@/lib/atproto/auth';
 import Header from '@/components/layout/Header';
 import Sidebar from '@/components/layout/Sidebar';
 import FeedList from '@/components/feed/FeedList';
+import OnboardingWizard, { isOnboardingComplete } from '@/components/onboarding/OnboardingWizard';
 
 export default function HomePageContent() {
-  const router = useRouter();
   const { isAuthenticated, restoreSession, setAgent, loading: authLoading } = useAuthStore();
-  const { loadFollowedTopics, hydrateCustomTopics } = useTopicStore();
+  const { loadFollowedTopics, hydrateCustomTopics, popularTopicsLoaded } = useTopicStore();
+  const { loadTopicCustomizations } = useTopicFeedStore();
+  const { loadRules } = useModerationStore();
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [processingCallback, setProcessingCallback] = useState(false);
   const [callbackError, setCallbackError] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const didRestore = useRef(false);
 
@@ -40,7 +44,12 @@ export default function HomePageContent() {
     try {
       const { did, handle, avatar, agent } = await auth.handleCallback();
       setAgent(agent, did, handle, avatar);
-      router.replace('/');
+      // Full page navigation instead of client-side routing — same as the
+      // dedicated /oauth/callback page.  Client-side router.replace('/')
+      // after setAgent can race with the RSC hydration and trigger a
+      // hydration mismatch error (server rendered landing page, client
+      // switching to authenticated layout mid-flight).
+      window.location.replace('/');
       setProcessingCallback(false);
     } catch (err) {
       setCallbackError(
@@ -48,7 +57,7 @@ export default function HomePageContent() {
       );
       setProcessingCallback(false);
     }
-  }, [router, setAgent]);
+  }, [setAgent]);
 
   useEffect(() => {
     if (isCallback) {
@@ -63,32 +72,27 @@ export default function HomePageContent() {
   useEffect(() => {
     if (isAuthenticated) {
       hydrateCustomTopics();
+      loadTopicCustomizations();
+      loadRules();
       // loadFollowedTopics internally awaits loadPopularTopics before
       // setting loading=false, so the feed-store sees complete topic &
       // feed-generator data on its first load.
       loadFollowedTopics();
     }
-  }, [isAuthenticated, hydrateCustomTopics, loadFollowedTopics]);
+  }, [isAuthenticated, hydrateCustomTopics, loadTopicCustomizations, loadFollowedTopics, loadRules]);
 
-  // Authenticated — main feed
-  if (isAuthenticated) {
-    return (
-      <div className="min-h-screen">
-        <Header onToggleSidebar={() => setMobileSidebarOpen((v) => !v)} />
-        <div className="max-w-[1400px] mx-auto px-4 py-4 flex gap-4">
-          <Sidebar
-            drawerOpen={mobileSidebarOpen}
-            onDrawerClose={() => setMobileSidebarOpen(false)}
-          />
-          <main className="flex-1 min-w-0 max-w-3xl">
-            <FeedList />
-          </main>
-        </div>
-      </div>
-    );
-  }
+  // Show onboarding after first sign-in (once popular topics are ready)
+  useEffect(() => {
+    if (isAuthenticated && popularTopicsLoaded && !isOnboardingComplete()) {
+      setShowOnboarding(true);
+    }
+  }, [isAuthenticated, popularTopicsLoaded]);
 
-  // Callback in progress
+  // Callback in progress — must be checked BEFORE isAuthenticated so the
+  // spinner stays visible during the entire OAuth handshake.  Otherwise
+  // setAgent(authenticated=true) triggers a render of the authenticated
+  // layout, then window.location.replace('/') navigates away, causing a
+  // flash and potential hydration mismatch.
   if (processingCallback) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-dark">
@@ -114,6 +118,26 @@ export default function HomePageContent() {
     );
   }
 
+  // Authenticated — main feed
+  if (isAuthenticated) {
+    return (
+      <div className="min-h-screen">
+        <Header onToggleSidebar={() => setMobileSidebarOpen((v) => !v)} />
+        <Sidebar
+          drawerOpen={mobileSidebarOpen}
+          onDrawerClose={() => setMobileSidebarOpen(false)}
+        />
+        <main className="max-w-3xl mx-auto px-4 py-4">
+          <FeedList />
+        </main>
+
+        {showOnboarding && (
+          <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+        )}
+      </div>
+    );
+  }
+
   // Not authenticated — landing page
   if (!authLoading && !isAuthenticated) {
     return (
@@ -121,7 +145,7 @@ export default function HomePageContent() {
         <Header />
         <main className="max-w-2xl mx-auto px-4 py-20 text-center">
           <h1 className="text-4xl font-bold text-text-100 mb-4">
-            Reddit over Bluesky
+            Follow topics, not accounts
           </h1>
           <p className="text-lg text-text-400 mb-8 max-w-md mx-auto">
             Follow topics, not accounts. See the best posts from across the

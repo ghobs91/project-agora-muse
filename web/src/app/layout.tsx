@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import PwaRegistrator from '@/components/pwa/PwaRegistrator';
 import PwaInstallOverlay from '@/components/pwa/PwaInstallOverlay';
+import DesktopSidebar from '@/components/layout/DesktopSidebar';
 import AutoLoadLLM from '@/components/llm/AutoLoadLLM';
 import MobileDock from '@/components/layout/MobileDock';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
@@ -56,14 +57,17 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="min-h-screen bg-surface-dark">
+      <body className="min-h-screen bg-surface-dark overflow-x-hidden">
         <ThemeProvider>
           <PwaRegistrator />
           <PwaInstallOverlay />
           <AutoLoadLLM />
-          <div className="pb-40 lg:pb-0">
+          <div className="flex">
+          <DesktopSidebar />
+          <div className="flex-1 min-w-0 pb-40 lg:pb-0">
             {children}
           </div>
+        </div>
           <MobileDock />
         </ThemeProvider>
       </body>
