@@ -8,12 +8,24 @@ interface ModerationRuleEditorProps {
   onClose?: () => void;
 }
 
+const SUGGESTED_FILTERS = [
+  { value: 'ragebait — posts designed to provoke outrage or anger', label: 'Ragebait' },
+  { value: 'slurs, hate speech, or derogatory language targeting any group', label: 'Slurs' },
+  { value: 'identity politics and tribal political arguments', label: 'Identity Politics' },
+  { value: 'spam, scams, or unsolicited commercial content', label: 'Spam' },
+  { value: 'crypto scams, pump-and-dump schemes, or NFT shilling', label: 'Crypto Scams' },
+  { value: 'harassment, doxxing, or targeted personal attacks', label: 'Harassment' },
+  { value: 'conspiracy theories, disinformation, or fake news', label: 'Disinformation' },
+  { value: 'excessively graphic violence or gore', label: 'Violence' },
+];
+
 export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorProps) {
   const { rules, addRule, removeRule } = useModerationStore();
 
-  const [ruleType, setRuleType] = useState<ModerationRuleRecord['ruleType']>('keyword');
   const [value, setValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const alreadyAdded = (v: string) => rules.some((r) => r.value === v);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,10 +35,25 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
     try {
       await addRule({
         id: crypto.randomUUID(),
-        ruleType,
+        ruleType: 'semantic',
         value: value.trim(),
       });
       setValue('');
+      onClose?.();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleAddSuggestion = async (suggestion: string) => {
+    if (alreadyAdded(suggestion)) return;
+    setSubmitting(true);
+    try {
+      await addRule({
+        id: crypto.randomUUID(),
+        ruleType: 'semantic',
+        value: suggestion,
+      });
       onClose?.();
     } finally {
       setSubmitting(false);
@@ -38,49 +65,19 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
       {/* Add rule form */}
       <form onSubmit={handleSubmit} className="card">
         <h4 className="font-medium text-base text-text-200 mb-3">
-          Add Moderation Rule
+          Add Semantic Filter
         </h4>
 
         <div className="space-y-3">
-          {/* Rule type */}
-          <div>
-            <label className="block text-sm text-text-500 mb-1">Rule Type</label>
-            <select
-              value={ruleType}
-              onChange={(e) =>
-                setRuleType(e.target.value as ModerationRuleRecord['ruleType'])
-              }
-              className="select-dark w-full"
-            >
-              <option value="keyword">Keyword Filter</option>
-              <option value="semantic">Semantic Filter</option>
-              <option value="mute">Mute User (DID)</option>
-              <option value="labeler">Bluesky Labeler</option>
-            </select>
-          </div>
-
-          {/* Value */}
           <div>
             <label className="block text-sm text-text-500 mb-1">
-              {ruleType === 'keyword'
-                ? 'Keyword or phrase to filter'
-                : ruleType === 'semantic'
-                  ? 'Describe content to filter (e.g., "spam about cryptocurrency")'
-                  : ruleType === 'mute'
-                    ? 'User DID to mute'
-                    : 'Labeler DID'}
+              Describe content to filter
             </label>
             <input
               type="text"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder={
-                ruleType === 'mute'
-                  ? 'did:plc:...'
-                  : ruleType === 'labeler'
-                    ? 'did:plc:...'
-                    : 'Enter value...'
-              }
+              placeholder='e.g. "ragebait" or "spam about cryptocurrency"'
               className="input-dark w-full"
             />
           </div>
@@ -90,16 +87,41 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
             disabled={submitting || !value.trim()}
             className="btn-primary text-sm w-full"
           >
-            {submitting ? 'Adding...' : 'Add Rule'}
+            {submitting ? 'Adding...' : 'Add Filter'}
           </button>
         </div>
       </form>
+
+      {/* Suggested filters */}
+      {rules.length === 0 && (
+        <div className="card">
+          <h4 className="font-medium text-base text-text-200 mb-3">
+            Example Filters
+          </h4>
+          <p className="text-xs text-text-500 mb-3">
+            Click any to add it, or describe your own above.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {SUGGESTED_FILTERS.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                onClick={() => handleAddSuggestion(s.value)}
+                disabled={submitting || alreadyAdded(s.value)}
+                className="px-3 py-1.5 rounded-full text-xs font-medium bg-surface-lighter text-text-400 hover:bg-sky-600/20 hover:text-sky-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                + {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Existing rules */}
       {rules.length > 0 && (
         <div className="card">
           <h4 className="font-medium text-base text-text-200 mb-3">
-            Active Rules ({rules.length})
+            Active Filters ({rules.length})
           </h4>
           <ul className="space-y-2">
             {rules.map((rule) => (
@@ -108,10 +130,7 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
                 className="flex items-center justify-between py-2 border-b border-dark-700/50 last:border-0"
               >
                 <div className="min-w-0">
-                  <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface-lighter text-text-400 mr-2">
-                    {rule.ruleType}
-                  </span>
-                  <span className="text-sm text-text-300 truncate">
+                  <span className="text-sm text-text-300 truncate block">
                     {rule.value}
                   </span>
                 </div>

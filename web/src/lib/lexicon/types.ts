@@ -25,7 +25,7 @@ export interface TopicFollowRecord {
 export interface ModerationRuleRecord {
   $type: 'app.agora.moderationRule';
   id: string;
-  ruleType: 'keyword' | 'semantic' | 'labeler' | 'mute';
+  ruleType: 'semantic';
   value: string;
   createdAt: string; // ISO date
 }

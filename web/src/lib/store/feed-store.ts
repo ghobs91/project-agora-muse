@@ -82,26 +82,13 @@ async function applyModerationRules(
     const rules = await records.getModerationRules(agent);
     const moderatedPostUris = new Set<string>();
 
-    // Split rules by type — only semantic rules need async LLM calls
-    const fastRules = rules.filter((r) => r.ruleType !== 'semantic');
-    const semanticRules = rules.filter((r) => r.ruleType === 'semantic');
-
-    // Fast rules: synchronous check (cheap)
-    for (const post of posts) {
-      for (const rule of fastRules) {
-        if (postMatchesFastRule(post, rule)) {
-          moderatedPostUris.add(post.uri);
-        }
-      }
-    }
-
-    if (semanticRules.length === 0) {
+    if (rules.length === 0) {
       return { moderatedPostUris };
     }
 
     // Pre-compute rule embeddings in one batched call (one ONNX call, not N)
     const ruleEmbeddings: Array<Float32Array | null> = [];
-    for (const rule of semanticRules) {
+    for (const rule of rules) {
       try {
         const embedding = await llm.getEmbeddingForText(rule.value);
         ruleEmbeddings.push(embedding);
@@ -118,7 +105,7 @@ async function applyModerationRules(
     for (let i = 0; i < posts.length; i++) {
       const postEmbedding = postEmbeddings[i];
       if (!postEmbedding) continue;
-      for (let j = 0; j < semanticRules.length; j++) {
+      for (let j = 0; j < rules.length; j++) {
         const ruleEmbedding = ruleEmbeddings[j];
         if (!ruleEmbedding) continue;
         const similarity = llm.cosineSimilarity(postEmbedding, ruleEmbedding);
@@ -132,23 +119,6 @@ async function applyModerationRules(
     return { moderatedPostUris };
   } catch {
     return { moderatedPostUris: new Set() };
-  }
-}
-
-function postMatchesFastRule(post: EnrichedPost, rule: { ruleType: string; value: string }): boolean {
-  switch (rule.ruleType) {
-    case 'keyword': {
-      const keyword = rule.value.toLowerCase();
-      return post.text.toLowerCase().includes(keyword);
-    }
-    case 'labeler': {
-      return post.labels.some((label) => label.src === rule.value);
-    }
-    case 'mute': {
-      return post.author.did === rule.value;
-    }
-    default:
-      return false;
   }
 }
 

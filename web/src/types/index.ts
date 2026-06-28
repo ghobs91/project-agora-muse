@@ -108,8 +108,8 @@ export interface TopicFollowRecord {
 /** Record: app.agora.moderationRule */
 export interface ModerationRuleRecord {
   id: string;
-  ruleType: 'keyword' | 'semantic' | 'labeler' | 'mute';
-  value: string; // keyword, semantic prompt, labeler DID, or muted user DID
+  ruleType: 'semantic';
+  value: string; // semantic filter description
   createdAt: string;
 }
 
