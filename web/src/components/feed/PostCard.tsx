@@ -9,6 +9,7 @@ import VibeCheck from '@/components/feed/VibeCheck';
 import { useTopicStore } from '@/lib/store/topic-store';
 import { useFeedStore } from '@/lib/store/feed-store';
 import { extractHashtags } from '@/lib/utils/text';
+import { useCompactViewStore } from '@/lib/store/compact-view-store';
 
 interface PostCardProps {
   post: EnrichedPost;
@@ -26,6 +27,7 @@ const PostCard = memo(function PostCard({ post, isHidden, onUpvote, onDownvote }
   });
   const { cleanText } = useMemo(() => extractHashtags(post.text), [post.text]);
   const [vibeOpen, setVibeOpen] = useState(false);
+  const compact = useCompactViewStore((s) => s.compact);
 
   if (isHidden) {
     return (
@@ -47,15 +49,15 @@ const PostCard = memo(function PostCard({ post, isHidden, onUpvote, onDownvote }
   return (
     <Link href={`/thread?uri=${encodeURIComponent(post.uri)}`} className="block">
       <article className="card-hover group">
-        <div className="flex flex-col sm:flex-row gap-3">
-          {/* Thumbnail — above text on mobile, left on desktop */}
+        <div className={`flex gap-3 ${compact ? 'flex-row' : 'flex-col sm:flex-row'}`}>
+          {/* Thumbnail — above text on mobile (expanded), left side (compact or desktop) */}
           {(hasThumbnail || hasExternalEmbed) && (
-            <div className="shrink-0 w-full sm:w-24">
+            <div className={`shrink-0 ${compact ? 'w-20' : 'w-full sm:w-24'}`}>
               {hasThumbnail && post.embed!.images && (
                 <img
                   src={post.embed!.images[0].thumb}
                   alt={post.embed!.images[0].alt}
-                  className="w-full h-40 sm:h-24 rounded-lg object-cover bg-surface-lighter"
+                  className={`rounded-lg object-cover bg-surface-lighter ${compact ? 'w-20 h-20' : 'w-full h-40 sm:h-24'}`}
                   loading="lazy"
                 />
               )}
@@ -63,7 +65,7 @@ const PostCard = memo(function PostCard({ post, isHidden, onUpvote, onDownvote }
                 <img
                   src={post.embed!.external.thumb}
                   alt=""
-                  className="w-full h-40 sm:h-24 rounded-lg object-cover bg-surface-lighter"
+                  className={`rounded-lg object-cover bg-surface-lighter ${compact ? 'w-20 h-20' : 'w-full h-40 sm:h-24'}`}
                   loading="lazy"
                 />
               )}
@@ -103,13 +105,13 @@ const PostCard = memo(function PostCard({ post, isHidden, onUpvote, onDownvote }
                   loading="lazy"
                 />
               )}
-              <span>{post.author.displayName || post.author.handle}</span>
+              <span className="max-w-[140px] truncate">{post.author.displayName || post.author.handle}</span>
               <span className="text-text-600">&bull;</span>
               <span suppressHydrationWarning>{timeAgo}</span>
             </div>
 
             {/* Title / text */}
-            <h3 className="text-base font-medium text-text-100 leading-snug mb-2 group-hover:text-white transition-colors">
+            <h3 className="text-base font-medium text-text-100 leading-snug mb-2 group-hover:text-white transition-colors break-words">
               {cleanText}
             </h3>
 
@@ -117,9 +119,9 @@ const PostCard = memo(function PostCard({ post, isHidden, onUpvote, onDownvote }
             {hasExternalEmbed && post.embed!.external && (
               <div className="flex items-center gap-1.5 text-xs text-text-500 mb-2">
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 1 0 5.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                 </svg>
-                {new URL(post.embed!.external.uri).hostname}
+                <span className="truncate min-w-0">{new URL(post.embed!.external.uri).hostname}</span>
               </div>
             )}
 
@@ -137,7 +139,7 @@ const PostCard = memo(function PostCard({ post, isHidden, onUpvote, onDownvote }
             )}
 
             {/* Action bar */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               {/* Upvote */}
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); onUpvote?.(post); }}

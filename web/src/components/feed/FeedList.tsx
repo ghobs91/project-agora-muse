@@ -6,9 +6,69 @@ import { useFeedStore } from '@/lib/store/feed-store';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useTopicStore } from '@/lib/store/topic-store';
 import { useLLMStore } from '@/lib/store/llm-store';
+import { useCompactViewStore } from '@/lib/store/compact-view-store';
 import * as feeds from '@/lib/atproto/feeds';
 import { isWebLLMLoaded, detectLanguageInBatch } from '@/lib/llm/web-llm';
 import PostCard from './PostCard';
+
+/** Latin-script languages that benefit from a non-Latin script heuristic fallback */
+const LATIN_LANGS = new Set(['en', 'es', 'pt', 'de', 'fr']);
+
+/**
+ * Quick heuristic: returns true if >25% of script-identifiable characters
+ * fall outside Latin-script ranges. Used as a fallback when Bluesky's
+ * `langs` field is absent and WebLLM isn't loaded. Catches CJK, Cyrillic,
+ * Arabic, Devanagari, Thai, Greek, Hebrew, etc.
+ */
+function isNonLatinScript(text: string): boolean {
+  if (!text) return false;
+  let latin = 0;
+  let foreign = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    // Skip whitespace
+    if (c === 0x0020 || c === 0x0009 || c === 0x000A || c === 0x000D) continue;
+    // Skip ASCII digits
+    if (c >= 0x0030 && c <= 0x0039) continue;
+    // Skip ASCII punctuation and symbols
+    if ((c >= 0x0021 && c <= 0x002F) || (c >= 0x003A && c <= 0x0040) ||
+        (c >= 0x005B && c <= 0x0060) || (c >= 0x007B && c <= 0x007E)) continue;
+    // Skip common Unicode punctuation ranges (General Punctuation, CJK punctuation)
+    if ((c >= 0x2000 && c <= 0x206F) || (c >= 0x3000 && c <= 0x303F) ||
+        (c >= 0xFF00 && c <= 0xFF0F) || (c >= 0xFF1A && c <= 0xFF20) ||
+        (c >= 0xFF3B && c <= 0xFF40) || (c >= 0xFF5B && c <= 0xFF65)) continue;
+
+    // ── Latin script ranges ────────────────────────────────────
+    if (
+      (c >= 0x0041 && c <= 0x005A) || // A-Z
+      (c >= 0x0061 && c <= 0x007A) || // a-z
+      (c >= 0x00C0 && c <= 0x00FF) || // Latin-1 Supplement letters
+      (c >= 0x0100 && c <= 0x024F) || // Latin Extended-A/B
+      (c >= 0x1E00 && c <= 0x1EFF)    // Latin Extended Additional
+    ) { latin++; continue; }
+
+    // ── Definitely non-Latin script ranges ─────────────────────
+    if (
+      (c >= 0x4E00 && c <= 0x9FFF) || // CJK Unified Ideographs
+      (c >= 0x3400 && c <= 0x4DBF) || // CJK Extension A
+      (c >= 0x3040 && c <= 0x309F) || // Hiragana
+      (c >= 0x30A0 && c <= 0x30FF) || // Katakana
+      (c >= 0xAC00 && c <= 0xD7AF) || // Hangul Syllables
+      (c >= 0x0400 && c <= 0x04FF) || // Cyrillic
+      (c >= 0x0600 && c <= 0x06FF) || // Arabic
+      (c >= 0x0750 && c <= 0x077F) || // Arabic Supplement
+      (c >= 0x0900 && c <= 0x097F) || // Devanagari
+      (c >= 0x0E00 && c <= 0x0E7F) || // Thai
+      (c >= 0x0370 && c <= 0x03FF) || // Greek
+      (c >= 0x0590 && c <= 0x05FF)    // Hebrew
+    ) { foreign++; continue; }
+
+    // Everything else: emoji, symbols, math — skip (script-neutral)
+  }
+  const total = latin + foreign;
+  if (total === 0) return false;
+  return foreign / total >= 0.25;
+}
 
 const LANGUAGES: { code: string; label: string }[] = [
   { code: '', label: 'All languages' },
@@ -54,6 +114,10 @@ export default function FeedList() {
   const didInitialLoad = useRef(false);
 
   const [lang, setLang] = useState<string>(getStoredLang);
+
+  // ─── Compact/card view toggle ───────────────────────────────────
+  const compact = useCompactViewStore((s) => s.compact);
+  const setCompact = useCompactViewStore((s) => s.set);
 
   // ─── LLM-powered language detection ────────────────────────────────
   const llmStatus = useLLMStore((s) => s.status);
@@ -131,27 +195,39 @@ export default function FeedList() {
   }, [lang, posts, llmStatus, llmLangKick]);
 
   // Visible posts (filter out hidden, moderated, posts without topic matches, by language, and LLM-detected language mismatches), sliced to current display count
+  // Shared language filter: explicit langs match > explicit mismatch > heuristic
+  const langFilter = useMemo(() => {
+    if (!lang) return () => true;
+    // For all languages: if the post declares any language at all, use it.
+    // If the post didn't declare a language, apply the non-Latin script
+    // heuristic for Latin-script targets (catches CJK/Cyrillic/Arabic/etc).
+    const isLatinLang = LATIN_LANGS.has(lang);
+    return (p: typeof posts[number]) => {
+      // Explicit match — post declares our language
+      if (p.langs?.includes(lang)) return true;
+      // Explicit mismatch — post declares other languages
+      if ((p.langs?.length ?? 0) > 0) return false;
+      // No langs field — apply heuristic for Latin-script languages
+      if (isLatinLang && isNonLatinScript(p.text)) return false;
+      return true;
+    };
+  }, [lang]);
+
   const visiblePosts = useMemo(
     () =>
       posts
         .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0 && !llmLangMismatchUris.has(p.uri))
-        .filter((p) => {
-          if (!lang) return true;
-          return (p.langs?.length ?? 0) === 0 || p.langs!.includes(lang);
-        })
+        .filter(langFilter)
         .slice(0, displayCount),
-    [posts, hiddenPostUris, moderatedPostUris, displayCount, lang, llmLangMismatchUris],
+    [posts, hiddenPostUris, moderatedPostUris, displayCount, langFilter, llmLangMismatchUris],
   );
 
   const allVisible = useMemo(
     () =>
       posts
         .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0 && !llmLangMismatchUris.has(p.uri))
-        .filter((p) => {
-          if (!lang) return true;
-          return (p.langs?.length ?? 0) === 0 || p.langs!.includes(lang);
-        }).length,
-    [posts, hiddenPostUris, moderatedPostUris, lang, llmLangMismatchUris],
+        .filter(langFilter).length,
+    [posts, hiddenPostUris, moderatedPostUris, langFilter, llmLangMismatchUris],
   );
   const hasMore = displayCount < allVisible;
 
@@ -325,22 +401,35 @@ export default function FeedList() {
       <div className="mb-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-text-100">Frontpage</h1>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-text-500 font-medium">Language</span>
-            <select
-              value={lang}
-              onChange={(e) => {
-                const code = e.target.value;
-                setLang(code);
-                setStoredLang(code);
-                window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-              }}
-              className="select-dark text-xs"
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>{l.label}</option>
-              ))}
-            </select>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-text-500 font-medium">View</span>
+              <select
+                value={compact ? 'compact' : 'card'}
+                onChange={(e) => setCompact(e.target.value === 'compact')}
+                className="select-dark text-xs"
+              >
+                <option value="card">Card View</option>
+                <option value="compact">Compact View</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-text-500 font-medium">Language</span>
+              <select
+                value={lang}
+                onChange={(e) => {
+                  const code = e.target.value;
+                  setLang(code);
+                  setStoredLang(code);
+                  window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+                }}
+                className="select-dark text-xs"
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </div>

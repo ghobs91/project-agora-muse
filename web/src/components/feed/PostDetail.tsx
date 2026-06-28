@@ -91,7 +91,7 @@ export default function PostDetail({
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium text-text-200 truncate">
+              <span className="font-medium text-text-200 max-w-[200px] truncate inline-block">
                 {post.author.displayName || post.author.handle}
               </span>
             </div>
@@ -104,7 +104,7 @@ export default function PostDetail({
         </div>
 
         {/* Post text */}
-        <p className="text-text-100 text-base leading-relaxed whitespace-pre-wrap mb-3">
+        <p className="text-text-100 text-base leading-relaxed whitespace-pre-wrap break-words mb-3">
           {cleanText}
         </p>
 

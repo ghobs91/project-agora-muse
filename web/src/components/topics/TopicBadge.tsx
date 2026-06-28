@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useTopicStore } from '@/lib/store/topic-store';
+import { isStaticTopicId } from '@/lib/data/topics';
 
 interface TopicBadgeProps {
   topicId: string;
@@ -15,7 +16,7 @@ export default function TopicBadge({ topicId, score, className }: TopicBadgeProp
 
   if (!topic) return null;
 
-  const href = topic.isCustom
+  const href = topic.isCustom || !isStaticTopicId(topic.id)
     ? `/topics/custom?id=${encodeURIComponent(topic.id)}`
     : `/topics/${topic.id}`;
 

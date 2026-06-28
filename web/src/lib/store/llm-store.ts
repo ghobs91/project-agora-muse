@@ -146,6 +146,29 @@ export const useLLMStore = create<LLMStore>((set, get) => {
         set({
           error: err instanceof Error ? err.message : 'Model load failed',
         });
+
+        // If a WebLLM model failed (e.g. WebGPU present but adapter/memory
+        // insufficient), fall back to the lightweight embeddings model so
+        // topic matching and custom topic creation still work.
+        if (model.backend === 'webllm') {
+          const fallback = AVAILABLE_MODELS.find((m) => m.backend === 'embeddings');
+          if (fallback) {
+            set({
+              selectedModel: fallback.id,
+              status: 'loading',
+              progress: 0,
+              error: null,
+            });
+            try {
+              await loadEmbeddingModel();
+            } catch (embedErr) {
+              set({
+                error: embedErr instanceof Error ? embedErr.message : 'Fallback model load failed',
+                status: 'error',
+              });
+            }
+          }
+        }
       }
     },
 

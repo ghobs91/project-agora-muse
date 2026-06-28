@@ -84,10 +84,10 @@ export default function CommentItem({
             )}
           </div>
 
-          <span className="text-sm font-medium text-text-300 truncate">
+          <span className="text-sm font-medium text-text-300 truncate min-w-0">
             {comment.author.displayName || comment.author.handle}
           </span>
-          <span className="text-xs text-text-600 truncate">
+          <span className="text-xs text-text-600 truncate min-w-0">
             {comment.author.handle}
           </span>
           <span className="text-text-600">•</span>
@@ -97,7 +97,7 @@ export default function CommentItem({
         {/* Comment body */}
         {!collapsed && (
           <>
-            <p className="text-sm text-text-300 leading-relaxed whitespace-pre-wrap ml-7 mb-2">
+            <p className="text-sm text-text-300 leading-relaxed whitespace-pre-wrap break-words ml-7 mb-2">
               {comment.text}
             </p>
 
