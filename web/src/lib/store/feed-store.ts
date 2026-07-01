@@ -16,8 +16,23 @@ const feedCursors = new Map<string, string | null>();
 const MAX_FEED_CACHE = 100;
 const MAX_CURSOR_CACHE = 200;
 
-/** Max time (ms) to wait for a feed-generator fetch before timing out. */
-const FEED_FETCH_TIMEOUT_MS = 8_000;
+/** Max time (ms) to wait for a feed-generator fetch before timing out.
+ *  Dead/cold generators return empty here so they don't block first paint.
+ *  Feed generators that haven't responded in 3s are skipped this load and
+ *  retried (cache miss) on the next. */
+const FEED_FETCH_TIMEOUT_MS = 3_000;
+
+/** Concurrency for fetch tasks. Feed generators live on diverse hosts
+ *  (skyfeed.me, bsky.app, etc.), so we can safely exceed the per-host
+ *  6-connection limit. Higher concurrency prevents one slow chunk from
+ *  serializing behind another. */
+const FETCH_CONCURRENCY = 8;
+
+/** First-paint deadline (ms). Posts are rendered as soon as the fast
+ *  fetch tasks finish OR this deadline elapses — whichever comes first.
+ *  Stragglers (slow/dead generators) append afterwards instead of
+ *  blocking the entire first paint. */
+const FIRST_PAINT_DEADLINE_MS = 1_500;
 
 function setFeedCache(key: string, posts: EnrichedPost[]) {
   if (feedCache.size >= MAX_FEED_CACHE) feedCache.clear();
@@ -56,6 +71,24 @@ async function batchWithLimit<T, R>(
   return results;
 }
 
+function interleaveFeeds(feedPostsByFeed: Map<string, EnrichedPost[]>): EnrichedPost[] {
+  const result: EnrichedPost[] = [];
+  const feedLists = Array.from(feedPostsByFeed.values());
+  let pos = 0;
+  let added = true;
+  while (added) {
+    added = false;
+    for (const list of feedLists) {
+      if (pos < list.length) {
+        result.push(list[pos]);
+        added = true;
+      }
+    }
+    pos++;
+  }
+  return result;
+}
+
 interface FeedStore {
   posts: EnrichedPost[];
   cursor: string | null;
@@ -80,9 +113,22 @@ interface FeedStore {
 
 // ─── Moderation Rule Application ───────────────────────────────────
 
+/** Number of posts embedded per ONNX inference call during moderation.
+ *  Each chunk is a synchronous main-thread burst (~46ms/post on WASM), so
+ *  smaller chunks mean shorter bursts with paint opportunities between
+ *  them. 8 keeps per-chunk overhead low while bounding jank to ~370ms. */
+const MODERATION_CHUNK_SIZE = 8;
+
+/** Yield to the event loop so the browser can paint / handle input between
+ *  synchronous ONNX inference chunks. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 async function applyModerationRules(
   agent: any,
   posts: EnrichedPost[],
+  onProgress?: (moderatedPostUris: Set<string>) => void,
 ): Promise<{ moderatedPostUris: Set<string> }> {
   // If the embedding model isn't already loaded, skip semantic moderation
   // entirely — loading the 23MB model + running embeddings here would spike
@@ -99,33 +145,46 @@ async function applyModerationRules(
       return { moderatedPostUris };
     }
 
-    // Pre-compute rule embeddings in one batched call (one ONNX call, not N)
-    const ruleEmbeddings: Array<Float32Array | null> = [];
-    for (const rule of rules) {
-      try {
-        const embedding = await llm.getEmbeddingForText(rule.value);
-        ruleEmbeddings.push(embedding);
-      } catch {
-        ruleEmbeddings.push(null);
-      }
-    }
+    // Pre-compute rule embeddings in one batched ONNX call (was N sequential)
+    const ruleEmbeddings = await llm.getBatchEmbeddingsForTexts(
+      rules.map((r) => r.value),
+    );
 
-    // Batch all post embeddings into a single ONNX call — critical for CPU perf
-    const postTexts = posts.map((p) => p.text);
-    const postEmbeddings = await llm.getBatchEmbeddingsForTexts(postTexts);
+    // Embed posts in chunks, yielding to the event loop between each chunk.
+    // A single 218-text ONNX call blocks the main thread for ~10s straight;
+    // chunking turns that continuous freeze into short bursts the browser
+    // can paint between, keeping scroll/click input responsive.
+    for (let start = 0; start < posts.length; start += MODERATION_CHUNK_SIZE) {
+      const chunk = posts.slice(start, start + MODERATION_CHUNK_SIZE);
+      const chunkEmbeddings = await llm.getBatchEmbeddingsForTexts(
+        chunk.map((p) => p.text),
+      );
 
-    // Compute similarities using CPU-side cosine (no more ONNX calls)
-    for (let i = 0; i < posts.length; i++) {
-      const postEmbedding = postEmbeddings[i];
-      if (!postEmbedding) continue;
-      for (let j = 0; j < rules.length; j++) {
-        const ruleEmbedding = ruleEmbeddings[j];
-        if (!ruleEmbedding) continue;
-        const similarity = llm.cosineSimilarity(postEmbedding, ruleEmbedding);
-        if (similarity > 0.6) {
-          moderatedPostUris.add(posts[i].uri);
-          break;
+      let addedInChunk = false;
+      for (let i = 0; i < chunk.length; i++) {
+        const postEmbedding = chunkEmbeddings[i];
+        if (!postEmbedding) continue;
+        for (let j = 0; j < rules.length; j++) {
+          const ruleEmbedding = ruleEmbeddings[j];
+          if (!ruleEmbedding) continue;
+          const similarity = llm.cosineSimilarity(postEmbedding, ruleEmbedding);
+          if (similarity > 0.6) {
+            moderatedPostUris.add(chunk[i].uri);
+            addedInChunk = true;
+            break;
+          }
         }
+      }
+
+      // Progressive update so rule-matching posts disappear as each chunk
+      // resolves, instead of all at once after the full sweep.
+      if (addedInChunk && onProgress) {
+        onProgress(new Set(moderatedPostUris));
+      }
+
+      // Yield between chunks (skip after the last one — nothing to wait for).
+      if (start + MODERATION_CHUNK_SIZE < posts.length) {
+        await yieldToEventLoop();
       }
     }
 
@@ -251,10 +310,6 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           }
         }
 
-        // Execute all fetches in parallel, limited to 4 concurrent to leave
-        // headroom in the browser's connection pool (6 per domain max)
-        const fetchResults = await batchWithLimit(fetchTasks, (fn) => fn(), 4);
-
         // Count feed-generator tasks (they come first in the fetchTasks array)
         let feedGenTaskCount = 0;
         for (const topicId of followedIds) {
@@ -264,28 +319,28 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           }
         }
 
-        // Separate feed-generator posts (already curated by Bluesky) from
-        // search/hashtag posts (uncurated). Bluesky feed generators intelligently
-        // rank their output — we defer to their ordering instead of re-sorting.
+        // ─── Incremental first paint ───────────────────────────────────
+        // Run all fetch tasks concurrently, but render as soon as the fast
+        // ones finish (or FIRST_PAINT_DEADLINE_MS elapses) instead of
+        // awaiting the full batch. Dead/cold feed generators that hit the
+        // timeout would otherwise block 200+ ready posts behind a blank
+        // skeleton for tens of seconds.
+        //
+        // Shared accumulators mutated as tasks complete:
         const feedGenPostsByFeed = new Map<string, EnrichedPost[]>();
         const otherPosts: EnrichedPost[] = [];
         const seen = new Set<string>();
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+        const isRecent = (p: EnrichedPost) => now - new Date(p.indexedAt).getTime() < ONE_DAY_MS;
 
-        for (let i = 0; i < fetchResults.length; i++) {
-          const r = fetchResults[i];
-          if (r.status === 'rejected') continue;
-          const isFeedGen = i < feedGenTaskCount;
-
-          for (const post of r.value.posts) {
+        function ingestPosts(posts: EnrichedPost[], isFeedGen: boolean, feedUri?: string) {
+          for (const post of posts) {
             if (seen.has(post.uri)) continue;
+            if (!isRecent(post)) continue;
             seen.add(post.uri);
-
-            if (isFeedGen && r.value.feedUri) {
-              let list = feedGenPostsByFeed.get(r.value.feedUri);
-              if (!list) {
-                list = [];
-                feedGenPostsByFeed.set(r.value.feedUri, list);
-              }
+            if (isFeedGen && feedUri) {
+              let list = feedGenPostsByFeed.get(feedUri);
+              if (!list) { list = []; feedGenPostsByFeed.set(feedUri, list); }
               list.push(post);
             } else {
               otherPosts.push(post);
@@ -293,43 +348,74 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           }
         }
 
-        // Round-robin interleave feed-generator posts so no single feed dominates
-        const interleaved: EnrichedPost[] = [];
-        const feedLists = Array.from(feedGenPostsByFeed.values());
-        if (feedLists.length > 0) {
-          let pos = 0;
-          let added = true;
-          while (added) {
-            added = false;
-            for (const list of feedLists) {
-              if (pos < list.length) {
-                interleaved.push(list[pos]);
-                added = true;
-              }
-            }
-            pos++;
+        function buildOrderedPosts(): EnrichedPost[] {
+          // Round-robin interleave feed-gen posts so no single feed dominates;
+          // sort search/hashtag posts by likeCount (no curation). Feed-gen
+          // first, then search/hashtag. Pinned posts removed.
+          const interleaved = interleaveFeeds(feedGenPostsByFeed);
+          const sortedOther = [...otherPosts].sort((a, b) => b.likeCount - a.likeCount);
+          return [...interleaved, ...sortedOther].filter((p) => !p.isPinned);
+        }
+
+        // Run tasks with a concurrency cap. Each completed task ingests its
+        // posts into the shared accumulators; we render once the first-paint
+        // deadline passes (or all tasks settle, whichever is first), then
+        // again after any stragglers finish.
+        let nextTaskIdx = 0;
+        let activeCount = 0;
+        let allDone = fetchTasks.length === 0;
+        let firstPainted = false;
+        let resolveAllDone: () => void = () => {};
+        const allDonePromise = new Promise<void>((resolve) => { resolveAllDone = resolve; });
+        if (allDone) resolveAllDone();
+
+        function startNext(): void {
+          while (activeCount < FETCH_CONCURRENCY && nextTaskIdx < fetchTasks.length) {
+            const i = nextTaskIdx++;
+            const isFeedGen = i < feedGenTaskCount;
+            const task = fetchTasks[i];
+            activeCount++;
+            task()
+              .then((r) => { ingestPosts(r.posts, isFeedGen, r.feedUri); })
+              .catch(() => { /* one feed failing shouldn't block the rest */ })
+              .finally(() => {
+                activeCount--;
+                if (nextTaskIdx >= fetchTasks.length && activeCount === 0) {
+                  allDone = true;
+                  resolveAllDone();
+                } else {
+                  startNext();
+                }
+              });
+          }
+        }
+        startNext();
+
+        // Wait for either the first-paint deadline or full completion.
+        await Promise.race([
+          allDonePromise,
+          new Promise<void>((resolve) => setTimeout(resolve, FIRST_PAINT_DEADLINE_MS)),
+        ]);
+
+        // First paint: render whatever has arrived. Skip the LLM-scoring
+        // block below for the early subset (it runs once on the final set).
+        if (!firstPainted) {
+          firstPainted = true;
+          const earlyPosts = buildOrderedPosts();
+          if (earlyPosts.length > 0) {
+            set({ posts: earlyPosts, loading: false, displayCount: 15 });
           }
         }
 
-        // Filter to last 24 hours
-        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-        const filteredFeedGen = interleaved.filter((p) => {
-          const postTime = new Date(p.indexedAt).getTime();
-          return now - postTime < ONE_DAY_MS;
-        });
+        // Wait for any remaining stragglers (slow/dead generators).
+        if (!allDone) await allDonePromise;
 
-        // Sort search/hashtag posts by likeCount (they have no curation)
-        otherPosts.sort((a, b) => b.likeCount - a.likeCount);
-        const filteredOther = otherPosts.filter((p) => {
-          const postTime = new Date(p.indexedAt).getTime();
-          return now - postTime < ONE_DAY_MS;
-        });
-
-        // Combine: feed-generator posts first, then search/hashtag posts
-        allPosts = [...filteredFeedGen, ...filteredOther];
-
-        // Remove pinned posts
-        allPosts = allPosts.filter((p) => !p.isPinned);
+        // Final ordering with the complete dataset. If stragglers added new
+        // posts, this re-sets the store (posts may shift order as the
+        // round-robin interleave rebalances — acceptable vs a 40s blank
+        // skeleton). If everything finished before the deadline, this is a
+        // no-op identical set.
+        allPosts = buildOrderedPosts();
 
         // LLM scoring for topic matching (not used for ranking — Bluesky
         // feed generators already rank posts intelligently)
@@ -407,9 +493,16 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
       // Apply moderation rules during browser idle time so it doesn't
       // compete with rendering or other UI work right after the feed loads.
+      // The embedding work itself is chunked inside applyModerationRules
+      // with event-loop yields, so it can't freeze the UI even after the
+      // idle deadline fires.
       if (allPosts.length > 0) {
         const runModeration = () => {
-          applyModerationRules(agent, allPosts).then(({ moderatedPostUris }) => {
+          applyModerationRules(agent, allPosts, (progress) => {
+            // Progressive update: hide rule-matching posts as each chunk
+            // resolves instead of waiting for the full sweep.
+            set({ moderatedPostUris: progress });
+          }).then(({ moderatedPostUris }) => {
             if (moderatedPostUris.size > 0) {
               set({ moderatedPostUris });
             }
@@ -480,33 +573,58 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
               feedsWithCursor,
               async ({ topicId, feedUri }) => {
                 const cursor = feedCursors.get(feedUri);
-                if (!cursor) return { topicId, posts: [] as EnrichedPost[] };
+                if (!cursor) return { topicId, feedUri, posts: [] as EnrichedPost[] };
 
                 if (feedUri.startsWith('search:')) {
                   const [, , term] = feedUri.split(':');
                   const result = await feeds.searchPosts(agent, term, { limit: 10, cursor });
                   setCursorCache(feedUri, result.cursor ?? null);
-                  return { topicId, posts: result.posts };
+                  return { topicId, feedUri, posts: result.posts };
                 }
 
                 const result = await feeds.fetchCustomFeed(agent, feedUri, { limit: 10, cursor });
                 setCursorCache(feedUri, result.cursor ?? null);
-                return { topicId, posts: result.posts };
+                return { topicId, feedUri, posts: result.posts };
               },
               4,
             );
 
+            // Separate feed-gen posts from search/hashtag posts
+            const feedGenPostsByFeed = new Map<string, EnrichedPost[]>();
+            const otherNewPosts: EnrichedPost[] = [];
+
             for (const r of fetchResults) {
               if (r.status === 'rejected') continue;
-              for (const post of r.value.posts) {
+              const { topicId, feedUri, posts: resultPosts } = r.value;
+
+              for (const post of resultPosts) {
                 if (seen.has(post.uri)) continue;
                 seen.add(post.uri);
-                newPosts.push({
+                const enriched = {
                   ...post,
-                  matchedTopics: [{ topicId: r.value.topicId, score: 0.5 }],
-                });
+                  matchedTopics: [{ topicId, score: 0.5 }],
+                };
+
+                // Feed generator posts: group by feedUri for interleaving.
+                // Search/hashtag posts: collect separately.
+                if (feedUri && !feedUri.startsWith('search:')) {
+                  let list = feedGenPostsByFeed.get(feedUri);
+                  if (!list) {
+                    list = [];
+                    feedGenPostsByFeed.set(feedUri, list);
+                  }
+                  list.push(enriched);
+                } else {
+                  otherNewPosts.push(enriched);
+                }
               }
             }
+
+            // Round-robin interleave feed-generator posts so no single
+            // feed dominates the paginated results.
+            const interleavedNew = interleaveFeeds(feedGenPostsByFeed);
+
+            newPosts.push(...interleavedNew, ...otherNewPosts);
 
             if (newPosts.length > 0) {
               set({
