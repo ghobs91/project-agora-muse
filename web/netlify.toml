@@ -1,0 +1,6 @@
+# Netlify config for the "web/" base directory.
+# If your Netlify site base directory is set to the repo root, the root
+# netlify.toml is used instead and this file is ignored.
+[build]
+  command = "npm run build"
+  publish = "out"

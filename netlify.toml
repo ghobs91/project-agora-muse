@@ -1,0 +1,6 @@
+# Netlify config for the monorepo root base directory.
+# If your Netlify site base directory is set to "web/", this file is ignored
+# and the web/netlify.toml config is used instead.
+[build]
+  command = "cd web && npm run build"
+  publish = "web/out"
