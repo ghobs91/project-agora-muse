@@ -145,5 +145,8 @@ vite.config.ts.timestamp-*
 # Local Netlify folder
 .netlify
 
+# Downloaded model weights (extracted during build)
+web/public/models/
+
 # macOS
 .DS_Store
