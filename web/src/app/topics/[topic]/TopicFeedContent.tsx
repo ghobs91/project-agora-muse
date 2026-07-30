@@ -62,6 +62,9 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
 
   const [posts, setPosts] = useState<EnrichedPost[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** True while any feed/search cursor can still yield another page. */
+  const [hasServerPages, setHasServerPages] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [displayCount, setDisplayCount] = useState(15);
   const [mounted, setMounted] = useState(false);
@@ -89,11 +92,13 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
   const cursorsRef = useRef<Map<string, string | null>>(new Map());
   const loadingMoreRef = useRef(false);
   const postsRef = useRef<EnrichedPost[]>([]);
+  const displayCountRef = useRef(15);
   const loadedTopicIdRef = useRef<string | null>(null);
   const loadedTermsKeyRef = useRef<string>('');
   const loadedFeedsKeyRef = useRef<string>('');
   const loadingRef = useRef(false);
   postsRef.current = posts;
+  displayCountRef.current = displayCount;
 
   useEffect(() => {
     setMounted(true);
@@ -158,6 +163,8 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
       setLoading(true);
       setError(null);
       setDisplayCount(15);
+      setHasServerPages(false);
+      setLoadingMore(false);
       // Reset server cursors so pagination starts fresh on reload
       cursorsRef.current.clear();
 
@@ -205,6 +212,10 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         scoredPosts.sort((a, b) => b.score - a.score);
         allPosts = scoredPosts.map((s) => s.post);
         setPosts(allPosts);
+        // Any non-null cursor means more pages are available from the network.
+        setHasServerPages(
+          [...cursorsRef.current.values()].some((c) => c != null && c !== ''),
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load posts');
       } finally {
@@ -353,10 +364,16 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
     if (loadingMoreRef.current || !topic || !agent) return;
     loadingMoreRef.current = true;
 
+    // Match home feed: reveal buffered posts immediately so the user never
+    // waits on the network before seeing more content.
+    const hadBuffered = postsRef.current.length > displayCountRef.current;
+    if (hadBuffered) {
+      setDisplayCount((prev) => prev + 15);
+    }
+
     const cursors = cursorsRef.current;
     const topicFeeds = getFeedsForTopic(topicId);
 
-    // Try server-side pagination first
     const feedsWithCursor = topicFeeds.filter((f) => {
       const c = cursors.get(f.uri);
       return c && c !== null;
@@ -371,13 +388,14 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         return c && c !== null;
       });
 
+    // Background server pagination. Never flip the full-page `loading` flag
+    // here — that unmounts the list + sentinel and breaks infinite scroll.
     if (feedsWithCursor.length > 0 || searchCursors.length > 0) {
-      setLoading(true);
+      setLoadingMore(true);
       try {
         const seen = new Set(postsRef.current.map((p) => p.uri));
         const newPosts: EnrichedPost[] = [];
 
-        // Fetch next page from feed generators
         const feedResults = await batchWithLimit(
           feedsWithCursor,
           async (f) => {
@@ -398,7 +416,6 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
           }
         }
 
-        // Fetch next page from search terms
         const searchResults = await batchWithLimit(
           searchCursors,
           async (term) => {
@@ -420,7 +437,6 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         }
 
         if (newPosts.length > 0) {
-          // Score new posts
           let scoredNew = newPosts;
           try {
             const texts = newPosts.map((p) => p.text);
@@ -437,45 +453,43 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
           }
 
           setPosts((prev) => [...prev, ...scoredNew]);
-          setLoading(false);
-          loadingMoreRef.current = false;
-          return;
+          // If the buffer was already exhausted, reveal the newly fetched page.
+          if (!hadBuffered) {
+            setDisplayCount((prev) => prev + 15);
+          }
+          setHasServerPages(
+            [...cursors.values()].some((c) => c != null && c !== ''),
+          );
+        } else {
+          // Server returned no new posts even with valid cursors — exhaust them
+          // so we stop refetching the same empty page.
+          for (const f of feedsWithCursor) cursors.delete(f.uri);
+          for (const term of searchCursors) cursors.delete(`search:${term}`);
+          setHasServerPages(false);
         }
-
-        // Server returned no new posts even with valid cursors — mark
-        // server-side pagination as exhausted by clearing cursors. Without
-        // this, hasServerCursors stays true and the observer keeps firing
-        // loadMore in a tight loop, each call refetching the same page.
-        for (const f of feedsWithCursor) cursors.delete(f.uri);
-        for (const term of searchCursors) cursors.delete(`search:${term}`);
       } catch {
-        // Fall through
+        // Keep whatever is already on screen
+      } finally {
+        setLoadingMore(false);
       }
-      setLoading(false);
+    } else {
+      setHasServerPages(false);
     }
 
-    // Server-side exhausted — fall back to client-side display
-    setDisplayCount((prev) => prev + 15);
     loadingMoreRef.current = false;
   }, [agent, topic, topicId, getFeedsForTopic, removedTerms, addedTerms]);
 
-  useEffect(() => {
-    const el = observerRef.current;
-    if (!el) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && !loading) {
-          loadMore();
-        }
-      },
-      { rootMargin: '200px' },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loading, loadMore]);
-
-  const isLoading = loading || discovering;
+  // Infinite scroll — keep sentinel mounted; only gate on loadingMore, not the
+  // full-page initial-load skeleton.
+  const handleObserver = useCallback(
+    (entries: IntersectionObserverEntry[]) => {
+      const [entry] = entries;
+      if (entry.isIntersecting && !loading && !loadingMore) {
+        loadMore();
+      }
+    },
+    [loading, loadingMore, loadMore],
+  );
 
   const visiblePosts = useMemo(
     () =>
@@ -485,25 +499,29 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
     [posts, displayCount, hiddenPostUris, moderatedPostUris],
   );
 
-  const hasServerCursors = useMemo(() => {
-    if (!topic) return false;
-    const cursors = cursorsRef.current;
-    const topicFeeds = getFeedsForTopic(topicId);
-    const activeTerms = topic.seedTerms.filter((t) => !removedTerms.has(t));
-    const allTerms = [...activeTerms, ...addedTerms].slice(0, 5);
+  const filteredCount = useMemo(
+    () => posts.filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri)).length,
+    [posts, hiddenPostUris, moderatedPostUris],
+  );
 
-    const hasFeedCursor = topicFeeds.some((f) => {
-      const c = cursors.get(f.uri);
-      return c && c !== null;
-    });
-    const hasSearchCursor = allTerms.slice(0, 3).some((term) => {
-      const c = cursors.get(`search:${term}`);
-      return c && c !== null;
-    });
-    return hasFeedCursor || hasSearchCursor;
-  }, [topic, topicId, getFeedsForTopic, removedTerms, addedTerms]);
+  // Local buffer OR remaining server pages OR an in-flight fetch (so the
+  // sentinel stays mounted until new posts land).
+  const hasMore = displayCount < filteredCount || hasServerPages || loadingMore;
 
-  const hasMore = displayCount < posts.length || hasServerCursors;
+  useEffect(() => {
+    const el = observerRef.current;
+    if (!el || !hasMore) return;
+
+    const observer = new IntersectionObserver(handleObserver, {
+      rootMargin: '200px',
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleObserver, hasMore]);
+
+  // Full-page skeleton only for the initial load (no posts yet). Pagination
+  // must not tear down the list — that unmounts the sentinel and breaks scroll.
+  const isInitialLoading = (loading || discovering) && posts.length === 0;
 
   const parentRef = useRef<HTMLDivElement>(null);
   const [parentOffset, setParentOffset] = useState(0);
@@ -596,7 +614,7 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
         <div className="flex flex-col lg:flex-row gap-4">
           {/* Feed column — second on mobile, first (left) on desktop */}
           <div className="flex-1 min-w-0 max-w-3xl order-2 lg:order-1">
-            {isLoading ? (
+            {isInitialLoading ? (
               <div className="space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="card animate-pulse">
@@ -656,7 +674,13 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                     );
                   })}
                 </div>
+                {/* Sentinel outside virtualizer so it stays mounted while scrolling */}
                 {hasMore && <div ref={observerRef} className="h-4" />}
+                {loadingMore && (
+                  <div className="flex justify-center py-4">
+                    <div className="w-6 h-6 border-2 border-dark-700 border-t-sky-500 rounded-full animate-spin" />
+                  </div>
+                )}
                 {!hasMore && posts.length > 0 && (
                   <p className="text-center text-xs text-text-600 py-4">
                     — End of feed —
@@ -707,7 +731,7 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                       </button>
                     )}
                   </div>
-                  <div className={`flex flex-wrap gap-1.5${!feedsExpanded ? ' max-h-[28px] overflow-hidden' : ''}`}>
+                  <div className={`flex flex-wrap gap-1.5${activeFeeds.length > 3 && !feedsExpanded ? ' max-h-[26px] overflow-hidden' : ''}`}>
                     {activeFeeds.map((feed) => {
                       const isPendingRemove = pendingFeedRemovals.has(feed.uri);
                       const isAdded = addedFeeds.some(f => f.uri === feed.uri);
@@ -881,7 +905,7 @@ export default function TopicFeedContent({ topicId }: TopicFeedContentProps) {
                     </button>
                   )}
                 </div>
-                <div className={`flex flex-wrap gap-1.5${!termsExpanded ? ' max-h-[28px] overflow-hidden' : ''}`}>
+                <div className={`flex flex-wrap gap-1.5${topic.seedTerms.length > 5 && !termsExpanded ? ' max-h-[26px] overflow-hidden' : ''}`}>
                   {/* Original seed terms */}
                   {topic.seedTerms
                     .filter((term) => !removedTerms.has(term))

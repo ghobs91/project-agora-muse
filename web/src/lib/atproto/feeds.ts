@@ -2,8 +2,18 @@
  * AT Protocol feed fetching.
  */
 
-import type { Agent } from '@atproto/api';
-import type { EnrichedPost, PostAuthor, PostEmbed, PostLabel, FeedSortMode, FeedGenerator, ThreadPost, ThreadComment, PostThread } from '@/types';
+import type { Agent } from "@atproto/api";
+import type {
+  EnrichedPost,
+  PostAuthor,
+  PostEmbed,
+  PostLabel,
+  FeedSortMode,
+  FeedGenerator,
+  ThreadPost,
+  ThreadComment,
+  PostThread,
+} from "@/types";
 
 // ─── Inline type helpers (avoiding import issues with namespace exports) ────
 
@@ -34,6 +44,8 @@ type PostView = {
 type FeedItem = {
   post: PostView;
   reason?: Record<string, unknown>;
+  /** Present when this feed item is a reply to another post */
+  reply?: unknown;
 };
 
 type ThreadReplyItem = {
@@ -61,16 +73,16 @@ export async function fetchHomeFeed(
   // Guard: the Agent instance may not have getTimeline if the underlying
   // XRPC client failed to initialize (e.g. stale OAuth session, missing
   // fetchHandler). Return empty data so the feed store can degrade gracefully.
-  if (typeof (agent as any).getTimeline !== 'function') {
+  if (typeof (agent as any).getTimeline !== "function") {
     return { posts: [], cursor: undefined };
   }
 
   const response = await agent.getTimeline({ limit, cursor });
   const data = response.data as { feed?: FeedItem[]; cursor?: string };
 
-  const posts = (data.feed || []).map((item) =>
-    mapFeedItemToPost(item),
-  );
+  const posts = (data.feed || [])
+    .map((item) => mapFeedItemToPost(item))
+    .filter((p): p is EnrichedPost => p !== null);
 
   return {
     posts,
@@ -88,7 +100,7 @@ export async function fetchCustomFeed(
 ): Promise<{ posts: EnrichedPost[]; cursor?: string }> {
   const { limit = 30, cursor } = options;
 
-  if (typeof (agent as any).app?.bsky?.feed?.getFeed !== 'function') {
+  if (typeof (agent as any).app?.bsky?.feed?.getFeed !== "function") {
     return { posts: [], cursor: undefined };
   }
 
@@ -99,9 +111,9 @@ export async function fetchCustomFeed(
   });
 
   const data = response.data as { feed?: FeedItem[]; cursor?: string };
-  const posts = (data.feed || []).map((item) =>
-    mapFeedItemToPost(item),
-  );
+  const posts = (data.feed || [])
+    .map((item) => mapFeedItemToPost(item))
+    .filter((p): p is EnrichedPost => p !== null);
 
   return {
     posts,
@@ -119,7 +131,7 @@ export async function searchPosts(
 ): Promise<{ posts: EnrichedPost[]; cursor?: string }> {
   const { limit = 30, cursor } = options;
 
-  if (typeof (agent as any).app?.bsky?.feed?.searchPosts !== 'function') {
+  if (typeof (agent as any).app?.bsky?.feed?.searchPosts !== "function") {
     return { posts: [], cursor: undefined };
   }
 
@@ -130,7 +142,9 @@ export async function searchPosts(
   });
 
   const data = response.data as { posts?: PostView[]; cursor?: string };
-  const posts = (data.posts || []).map(mapFeedViewToPost);
+  const posts = (data.posts || [])
+    .filter((view) => !view.record.reply)
+    .map(mapFeedViewToPost);
 
   return {
     posts,
@@ -149,20 +163,20 @@ export async function fetchPopularFeed(
 
   // Guard: the Agent's app.bsky.feed namespace may be missing if the XRPC
   // client failed to initialize (e.g. stale OAuth session).
-  if (typeof (agent as any).app?.bsky?.feed?.getFeed !== 'function') {
+  if (typeof (agent as any).app?.bsky?.feed?.getFeed !== "function") {
     return { posts: [], cursor: undefined };
   }
 
   const response = await agent.app.bsky.feed.getFeed({
-    feed: 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot',
+    feed: "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot",
     limit,
     cursor,
   });
 
   const data = response.data as { feed?: FeedItem[]; cursor?: string };
-  const posts = (data.feed || []).map((item) =>
-    mapFeedItemToPost(item),
-  );
+  const posts = (data.feed || [])
+    .map((item) => mapFeedItemToPost(item))
+    .filter((p): p is EnrichedPost => p !== null);
 
   return {
     posts,
@@ -186,7 +200,7 @@ export async function searchFeedGenerators(
     const url = `https://api.bsky.app/xrpc/app.bsky.unspecced.getPopularFeedGenerators?query=${encodeURIComponent(query)}&limit=${limit}`;
     const res = await fetch(url);
     if (res.ok) {
-      const data = await res.json() as {
+      const data = (await res.json()) as {
         feeds?: Array<{
           uri: string;
           cid?: string;
@@ -209,12 +223,14 @@ export async function searchFeedGenerators(
         description: f.description,
         avatar: f.avatar,
         likeCount: f.likeCount,
-        creator: f.creator ? {
-          did: f.creator.did,
-          handle: f.creator.handle,
-          displayName: f.creator.displayName,
-          avatar: f.creator.avatar,
-        } : undefined,
+        creator: f.creator
+          ? {
+              did: f.creator.did,
+              handle: f.creator.handle,
+              displayName: f.creator.displayName,
+              avatar: f.creator.avatar,
+            }
+          : undefined,
       }));
     }
   } catch {
@@ -225,7 +241,7 @@ export async function searchFeedGenerators(
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await (agent as any).api.xrpc.call(
-      'app.bsky.unspecced.getPopularFeedGenerators',
+      "app.bsky.unspecced.getPopularFeedGenerators",
       { params: { query, limit } },
     );
     const data = response?.data as {
@@ -251,12 +267,14 @@ export async function searchFeedGenerators(
       description: f.description,
       avatar: f.avatar,
       likeCount: f.likeCount,
-      creator: f.creator ? {
-        did: f.creator.did,
-        handle: f.creator.handle,
-        displayName: f.creator.displayName,
-        avatar: f.creator.avatar,
-      } : undefined,
+      creator: f.creator
+        ? {
+            did: f.creator.did,
+            handle: f.creator.handle,
+            displayName: f.creator.displayName,
+            avatar: f.creator.avatar,
+          }
+        : undefined,
     }));
   } catch {
     // Both methods failed — return empty
@@ -271,22 +289,22 @@ export async function likePost(
   postUri: string,
   postCid: string,
 ): Promise<void> {
-  if (typeof (agent as any).like !== 'function') {
-    throw new Error('Agent does not support like');
+  if (typeof (agent as any).like !== "function") {
+    throw new Error("Agent does not support like");
   }
   await agent.like(postUri, postCid);
 }
 
 export async function muteUser(agent: Agent, userDid: string): Promise<void> {
-  if (typeof (agent as any).app?.bsky?.graph?.muteActor !== 'function') {
-    throw new Error('Agent does not support muteActor');
+  if (typeof (agent as any).app?.bsky?.graph?.muteActor !== "function") {
+    throw new Error("Agent does not support muteActor");
   }
   await agent.app.bsky.graph.muteActor({ actor: userDid });
 }
 
 export async function unmuteUser(agent: Agent, userDid: string): Promise<void> {
-  if (typeof (agent as any).app?.bsky?.graph?.unmuteActor !== 'function') {
-    throw new Error('Agent does not support unmuteActor');
+  if (typeof (agent as any).app?.bsky?.graph?.unmuteActor !== "function") {
+    throw new Error("Agent does not support unmuteActor");
   }
   await agent.app.bsky.graph.unmuteActor({ actor: userDid });
 }
@@ -296,8 +314,8 @@ export async function getPostThread(
   postUri: string,
   depth: number = 6,
 ): Promise<PostThread> {
-  if (typeof (agent as any).app?.bsky?.feed?.getPostThread !== 'function') {
-    throw new Error('Agent does not support getPostThread');
+  if (typeof (agent as any).app?.bsky?.feed?.getPostThread !== "function") {
+    throw new Error("Agent does not support getPostThread");
   }
 
   const response = await agent.app.bsky.feed.getPostThread({
@@ -311,9 +329,7 @@ export async function getPostThread(
   };
 
   const rootPost = mapThreadPost(thread.post);
-  const replies = (thread.replies || []).map((r) =>
-    mapThreadComment(r, 0),
-  );
+  const replies = (thread.replies || []).map((r) => mapThreadComment(r, 0));
 
   return { post: rootPost, replies };
 }
@@ -326,8 +342,8 @@ export async function replyToPost(
   rootCid: string,
   text: string,
 ): Promise<void> {
-  if (typeof (agent as any).post !== 'function') {
-    throw new Error('Agent does not support post');
+  if (typeof (agent as any).post !== "function") {
+    throw new Error("Agent does not support post");
   }
   await agent.post({
     text,
@@ -347,8 +363,8 @@ export async function replyToPost(
  */
 export async function getUserPreferredLanguage(agent: Agent): Promise<string> {
   try {
-    if (typeof (agent as any).app?.bsky?.actor?.getPreferences !== 'function') {
-      return '';
+    if (typeof (agent as any).app?.bsky?.actor?.getPreferences !== "function") {
+      return "";
     }
     const response = await agent.app.bsky.actor.getPreferences();
     const prefs = response.data.preferences as Array<{
@@ -360,38 +376,45 @@ export async function getUserPreferredLanguage(agent: Agent): Promise<string> {
     // Look for content language preferences with visibility 'show'
     for (const pref of prefs) {
       if (
-        pref.$type === 'app.bsky.actor.defs#contentLabelPref' &&
-        pref.label?.startsWith('lang:') &&
-        pref.visibility === 'show'
+        pref.$type === "app.bsky.actor.defs#contentLabelPref" &&
+        pref.label?.startsWith("lang:") &&
+        pref.visibility === "show"
       ) {
-        return pref.label.replace('lang:', '');
+        return pref.label.replace("lang:", "");
       }
     }
 
-    return '';
+    return "";
   } catch {
-    return '';
+    return "";
   }
 }
 
 // ─── Mapping Helpers ─────────────────────────────────────────────────
 
-function mapFeedItemToPost(item: FeedItem): EnrichedPost {
+function mapFeedItemToPost(item: FeedItem): EnrichedPost | null {
+  // Skip posts that are replies to other posts
+  if (item.reply) return null;
+
   const post = mapFeedViewToPost(item.post);
-  if (item.reason?.$type === 'app.bsky.feed.defs#reasonPin') {
+  if (item.reason?.$type === "app.bsky.feed.defs#reasonPin") {
     post.isPinned = true;
   }
   return post;
 }
 
 function mapFeedViewToPost(view: PostView): EnrichedPost {
-  const record = view.record as { text?: string; createdAt?: string; langs?: string[] };
+  const record = view.record as {
+    text?: string;
+    createdAt?: string;
+    langs?: string[];
+  };
 
   return {
     uri: view.uri,
     cid: view.cid,
     author: mapAuthor(view.author),
-    text: record.text ?? '',
+    text: record.text ?? "",
     createdAt: record.createdAt ?? view.indexedAt,
     indexedAt: view.indexedAt,
     likeCount: view.likeCount ?? 0,
@@ -404,7 +427,7 @@ function mapFeedViewToPost(view: PostView): EnrichedPost {
   };
 }
 
-function mapAuthor(author: PostView['author']): PostAuthor {
+function mapAuthor(author: PostView["author"]): PostAuthor {
   return {
     did: author.did,
     handle: author.handle,
@@ -417,26 +440,31 @@ function mapEmbed(embed: Record<string, unknown>): PostEmbed | undefined {
   const type = embed.$type as string | undefined;
   if (!type) return undefined;
 
-  if (type === 'app.bsky.embed.images#view') {
+  if (type === "app.bsky.embed.images#view") {
     const data = embed as {
       images?: Array<{ thumb: string; fullsize: string; alt?: string }>;
     };
     return {
-      type: 'image',
+      type: "image",
       images: (data.images || []).map((img) => ({
         thumb: img.thumb,
         fullsize: img.fullsize,
-        alt: img.alt ?? '',
+        alt: img.alt ?? "",
       })),
     };
   }
 
-  if (type === 'app.bsky.embed.external#view') {
+  if (type === "app.bsky.embed.external#view") {
     const data = embed as {
-      external?: { uri: string; title: string; description: string; thumb?: string };
+      external?: {
+        uri: string;
+        title: string;
+        description: string;
+        thumb?: string;
+      };
     };
     return {
-      type: 'external',
+      type: "external",
       external: data.external
         ? {
             uri: data.external.uri,
@@ -448,8 +476,25 @@ function mapEmbed(embed: Record<string, unknown>): PostEmbed | undefined {
     };
   }
 
-  if (type === 'app.bsky.embed.record#view') {
-    return { type: 'record' };
+  if (type === "app.bsky.embed.record#view") {
+    return { type: "record" };
+  }
+
+  if (type === "app.bsky.embed.recordWithMedia#view") {
+    const data = embed as {
+      record?: { record: unknown };
+      media?: Record<string, unknown>;
+    };
+    // Extract the media portion so the NSFW filter can inspect images
+    if (data.media) {
+      const mediaEmbed = mapEmbed(data.media);
+      if (mediaEmbed) return mediaEmbed;
+    }
+    return { type: "record" };
+  }
+
+  if (type === "app.bsky.embed.video#view") {
+    return { type: "video" };
   }
 
   return undefined;
@@ -471,7 +516,9 @@ function mapLabel(label: {
   };
 }
 
-function mapThreadPost(view: PostView & { viewer?: { like?: string } }): ThreadPost {
+function mapThreadPost(
+  view: PostView & { viewer?: { like?: string } },
+): ThreadPost {
   const base = mapFeedViewToPost(view);
   return {
     ...base,
@@ -479,10 +526,7 @@ function mapThreadPost(view: PostView & { viewer?: { like?: string } }): ThreadP
   };
 }
 
-function mapThreadComment(
-  item: ThreadReplyItem,
-  depth: number,
-): ThreadComment {
+function mapThreadComment(item: ThreadReplyItem, depth: number): ThreadComment {
   const post = item.post;
   const record = post.record as { text?: string; createdAt?: string };
 
@@ -490,7 +534,7 @@ function mapThreadComment(
     uri: post.uri,
     cid: post.cid,
     author: mapAuthor(post.author),
-    text: record.text ?? '',
+    text: record.text ?? "",
     createdAt: record.createdAt ?? post.indexedAt,
     indexedAt: post.indexedAt,
     likeCount: post.likeCount ?? 0,

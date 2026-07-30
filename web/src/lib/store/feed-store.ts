@@ -2,14 +2,24 @@
  * Zustand store for feed state and post interactions.
  */
 
-import { create } from 'zustand';
-import type { EnrichedPost, FeedSortMode, Topic, TopicCustomizationRecord } from '@/types';
-import { useAuthStore } from './auth-store';
-import { useTopicStore } from './topic-store';
-import { useTopicFeedStore } from './topic-feed-store';
-import * as feeds from '@/lib/atproto/feeds';
-import * as records from '@/lib/atproto/records';
-import * as llm from '@/lib/llm/topic-matcher';
+import { create } from "zustand";
+import type {
+  EnrichedPost,
+  FeedSortMode,
+  Topic,
+  TopicCustomizationRecord,
+} from "@/types";
+import { useAuthStore } from "./auth-store";
+import { useTopicStore } from "./topic-store";
+import { useTopicFeedStore } from "./topic-feed-store";
+import * as feeds from "@/lib/atproto/feeds";
+import * as records from "@/lib/atproto/records";
+import * as llm from "@/lib/llm/topic-matcher";
+import {
+  isNsfwFilterEnabled,
+  classifyImageUrl,
+  isNsfwImage,
+} from "@/lib/nsfw/detector";
 
 const feedCache = new Map<string, EnrichedPost[]>();
 const feedCursors = new Map<string, string | null>();
@@ -34,13 +44,19 @@ const FETCH_CONCURRENCY = 8;
  *  blocking the entire first paint. */
 const FIRST_PAINT_DEADLINE_MS = 1_500;
 
+function maybeEvictCache<K, V>(map: Map<K, V>, maxSize: number) {
+  if (map.size >= maxSize) {
+    map.delete(map.keys().next().value!);
+  }
+}
+
 function setFeedCache(key: string, posts: EnrichedPost[]) {
-  if (feedCache.size >= MAX_FEED_CACHE) feedCache.clear();
+  maybeEvictCache(feedCache, MAX_FEED_CACHE);
   feedCache.set(key, posts);
 }
 
 function setCursorCache(key: string, cursor: string | null) {
-  if (feedCursors.size >= MAX_CURSOR_CACHE) feedCursors.clear();
+  maybeEvictCache(feedCursors, MAX_CURSOR_CACHE);
   feedCursors.set(key, cursor);
 }
 
@@ -71,7 +87,9 @@ async function batchWithLimit<T, R>(
   return results;
 }
 
-function interleaveFeeds(feedPostsByFeed: Map<string, EnrichedPost[]>): EnrichedPost[] {
+function interleaveFeeds(
+  feedPostsByFeed: Map<string, EnrichedPost[]>,
+): EnrichedPost[] {
   const result: EnrichedPost[] = [];
   const feedLists = Array.from(feedPostsByFeed.values());
   let pos = 0;
@@ -99,6 +117,7 @@ interface FeedStore {
   upvotedPostUris: Set<string>;
   displayCount: number;
   moderatedPostUris: Set<string>;
+  nsfwPostUris: Set<string>;
 
   loadFeed: (skipLLMScoring?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
@@ -133,7 +152,7 @@ async function applyModerationRules(
   // If the embedding model isn't already loaded, skip semantic moderation
   // entirely — loading the 23MB model + running embeddings here would spike
   // CPU right after the feed renders, freezing the UI.
-  if (llm.getLLMStatus() !== 'ready') {
+  if (llm.getLLMStatus() !== "ready") {
     return { moderatedPostUris: new Set() };
   }
 
@@ -194,15 +213,59 @@ async function applyModerationRules(
   }
 }
 
+// ─── NSFW Filter ────────────────────────────────────────────────────
+
+const NSFW_CONCURRENCY = 4;
+
+async function applyNsfwFilter(posts: EnrichedPost[]): Promise<Set<string>> {
+  if (!isNsfwFilterEnabled()) return new Set();
+
+  const nsfwPostUris = new Set<string>();
+  const imagePosts = posts.filter(
+    (p) => p.embed?.type === "image" && p.embed.images?.length,
+  );
+
+  if (imagePosts.length === 0) return nsfwPostUris;
+
+  for (let i = 0; i < imagePosts.length; i += NSFW_CONCURRENCY) {
+    const chunk = imagePosts.slice(i, i + NSFW_CONCURRENCY);
+    const results = await Promise.allSettled(
+      chunk.map(async (post) => {
+        if (!post.embed?.images) return null;
+        for (const image of post.embed.images) {
+          const predictions = await classifyImageUrl(image.thumb);
+          if (predictions && isNsfwImage(predictions)) {
+            return post.uri;
+          }
+        }
+        return null;
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) {
+        nsfwPostUris.add(result.value);
+      }
+    }
+
+    if (i + NSFW_CONCURRENCY < imagePosts.length) {
+      await yieldToEventLoop();
+    }
+  }
+
+  return nsfwPostUris;
+}
+
 export const useFeedStore = create<FeedStore>((set, get) => ({
   posts: [],
   cursor: null,
   loading: false,
   error: null,
-  sortMode: 'hot',
+  sortMode: "hot",
   hiddenPostUris: new Set(),
   upvotedPostUris: new Set(),
   moderatedPostUris: new Set(),
+  nsfwPostUris: new Set(),
   displayCount: 15,
 
   loadFeed: async (skipLLMScoring = false) => {
@@ -228,7 +291,11 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         const now = Date.now();
 
         // Collect all fetch tasks in parallel: feed generators + keyword search + hashtag search
-        type FetchTask = () => Promise<{ topicId: string; posts: EnrichedPost[]; feedUri?: string }>;
+        type FetchTask = () => Promise<{
+          topicId: string;
+          posts: EnrichedPost[];
+          feedUri?: string;
+        }>;
 
         const fetchTasks: FetchTask[] = [];
 
@@ -239,18 +306,25 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
             for (const feed of topicFeedList) {
               fetchTasks.push(async () => {
                 const cached = feedCache.get(feed.uri);
-                if (cached) return { topicId, posts: cached, feedUri: feed.uri };
+                if (cached)
+                  return { topicId, posts: cached, feedUri: feed.uri };
 
                 // Race against a timeout so a slow feed generator (e.g. a
                 // cold-started skyfeed.me query) doesn't block the entire
                 // initial feed load. The timeout resolves with empty posts
                 // so the UI can render what it has while the slow feed is
                 // fetched on a subsequent load.
-                const timeoutResult: { posts: EnrichedPost[]; cursor?: string } = { posts: [] };
+                const timeoutResult: {
+                  posts: EnrichedPost[];
+                  cursor?: string;
+                } = { posts: [] };
                 const result = await Promise.race([
                   feeds.fetchCustomFeed(agent, feed.uri, { limit: 5 }),
                   new Promise<typeof timeoutResult>((resolve) =>
-                    setTimeout(() => resolve(timeoutResult), FEED_FETCH_TIMEOUT_MS),
+                    setTimeout(
+                      () => resolve(timeoutResult),
+                      FEED_FETCH_TIMEOUT_MS,
+                    ),
                   ),
                 ]);
 
@@ -272,16 +346,32 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         // available — EXCEPT custom topics, where the auto-published Skyfeed
         // feed is supplemented with keyword search for more coverage).
         for (const topic of followedTopics) {
-          const hasFeeds = topicFeedsState.getFeedsForTopic(topic.id).length > 0;
-          const effectiveSeedTerms = getEffectiveSeedTerms(topic, topicFeedsState.customizationsByTopic);
+          const hasFeeds =
+            topicFeedsState.getFeedsForTopic(topic.id).length > 0;
+          const effectiveSeedTerms = getEffectiveSeedTerms(
+            topic,
+            topicFeedsState.customizationsByTopic,
+          );
           if (!hasFeeds || topic.isCustom) {
             for (const term of effectiveSeedTerms.slice(0, 3)) {
               fetchTasks.push(async () => {
-                const result = await feeds.searchPosts(agent, term, { limit: 5 });
-                setCursorCache(`search:${topic.id}:${term}`, result.cursor ?? null);
+                const result = await feeds.searchPosts(agent, term, {
+                  limit: 5,
+                });
+                setCursorCache(
+                  `search:${topic.id}:${term}`,
+                  result.cursor ?? null,
+                );
                 const postsWithTopic = result.posts.map((p) => ({
                   ...p,
-                  matchedTopics: [{ topicId: topic.id, score: skipLLMScoring ? llm.keywordMatchScore(p.text, topic) : 0.5 }],
+                  matchedTopics: [
+                    {
+                      topicId: topic.id,
+                      score: skipLLMScoring
+                        ? llm.keywordMatchScore(p.text, topic)
+                        : 0.5,
+                    },
+                  ],
                 }));
                 return { topicId: topic.id, posts: postsWithTopic };
               });
@@ -291,11 +381,19 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
         // Hashtag search tasks — limit to 1 per topic to avoid connection saturation
         for (const topic of followedTopics) {
-          const effectiveSeedTerms = getEffectiveSeedTerms(topic, topicFeedsState.customizationsByTopic);
-          const hashtag = '#' + effectiveSeedTerms[0].trim().toLowerCase().replace(/\s+/g, '');
+          const effectiveSeedTerms = getEffectiveSeedTerms(
+            topic,
+            topicFeedsState.customizationsByTopic,
+          );
+          if (!effectiveSeedTerms[0]) continue;
+          const hashtag =
+            "#" +
+            effectiveSeedTerms[0].trim().toLowerCase().replace(/\s+/g, "");
           if (hashtag.length > 1) {
             fetchTasks.push(async () => {
-              const result = await feeds.searchPosts(agent, hashtag, { limit: 5 });
+              const result = await feeds.searchPosts(agent, hashtag, {
+                limit: 5,
+              });
               const ONE_DAY_MS = 24 * 60 * 60 * 1000;
               const relevant = result.posts.filter((p) => {
                 const postTime = new Date(p.indexedAt).getTime();
@@ -331,16 +429,24 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         const otherPosts: EnrichedPost[] = [];
         const seen = new Set<string>();
         const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-        const isRecent = (p: EnrichedPost) => now - new Date(p.indexedAt).getTime() < ONE_DAY_MS;
+        const isRecent = (p: EnrichedPost) =>
+          now - new Date(p.indexedAt).getTime() < ONE_DAY_MS;
 
-        function ingestPosts(posts: EnrichedPost[], isFeedGen: boolean, feedUri?: string) {
+        function ingestPosts(
+          posts: EnrichedPost[],
+          isFeedGen: boolean,
+          feedUri?: string,
+        ) {
           for (const post of posts) {
             if (seen.has(post.uri)) continue;
             if (!isRecent(post)) continue;
             seen.add(post.uri);
             if (isFeedGen && feedUri) {
               let list = feedGenPostsByFeed.get(feedUri);
-              if (!list) { list = []; feedGenPostsByFeed.set(feedUri, list); }
+              if (!list) {
+                list = [];
+                feedGenPostsByFeed.set(feedUri, list);
+              }
               list.push(post);
             } else {
               otherPosts.push(post);
@@ -353,7 +459,9 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           // sort search/hashtag posts by likeCount (no curation). Feed-gen
           // first, then search/hashtag. Pinned posts removed.
           const interleaved = interleaveFeeds(feedGenPostsByFeed);
-          const sortedOther = [...otherPosts].sort((a, b) => b.likeCount - a.likeCount);
+          const sortedOther = [...otherPosts].sort(
+            (a, b) => b.likeCount - a.likeCount,
+          );
           return [...interleaved, ...sortedOther].filter((p) => !p.isPinned);
         }
 
@@ -366,18 +474,27 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         let allDone = fetchTasks.length === 0;
         let firstPainted = false;
         let resolveAllDone: () => void = () => {};
-        const allDonePromise = new Promise<void>((resolve) => { resolveAllDone = resolve; });
+        const allDonePromise = new Promise<void>((resolve) => {
+          resolveAllDone = resolve;
+        });
         if (allDone) resolveAllDone();
 
         function startNext(): void {
-          while (activeCount < FETCH_CONCURRENCY && nextTaskIdx < fetchTasks.length) {
+          while (
+            activeCount < FETCH_CONCURRENCY &&
+            nextTaskIdx < fetchTasks.length
+          ) {
             const i = nextTaskIdx++;
             const isFeedGen = i < feedGenTaskCount;
             const task = fetchTasks[i];
             activeCount++;
             task()
-              .then((r) => { ingestPosts(r.posts, isFeedGen, r.feedUri); })
-              .catch(() => { /* one feed failing shouldn't block the rest */ })
+              .then((r) => {
+                ingestPosts(r.posts, isFeedGen, r.feedUri);
+              })
+              .catch(() => {
+                /* one feed failing shouldn't block the rest */
+              })
               .finally(() => {
                 activeCount--;
                 if (nextTaskIdx >= fetchTasks.length && activeCount === 0) {
@@ -394,7 +511,9 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         // Wait for either the first-paint deadline or full completion.
         await Promise.race([
           allDonePromise,
-          new Promise<void>((resolve) => setTimeout(resolve, FIRST_PAINT_DEADLINE_MS)),
+          new Promise<void>((resolve) =>
+            setTimeout(resolve, FIRST_PAINT_DEADLINE_MS),
+          ),
         ]);
 
         // First paint: render whatever has arrived. Skip the LLM-scoring
@@ -403,7 +522,12 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           firstPainted = true;
           const earlyPosts = buildOrderedPosts();
           if (earlyPosts.length > 0) {
-            set({ posts: earlyPosts, loading: false, displayCount: 15 });
+            set({
+              posts: earlyPosts,
+              loading: false,
+              displayCount: 15,
+              nsfwPostUris: new Set(),
+            });
           }
         }
 
@@ -439,7 +563,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           for (let i = 0; i < allPosts.length; i++) {
             postIndexMap.set(allPosts[i], i);
           }
-          const allPostEmbeddings = await llm.getBatchEmbeddingsForTexts(
+          const allPostEmbeddings = await llm.getBatchEmbeddingsChunked(
             allPosts.map((p) => p.text),
           );
 
@@ -464,16 +588,18 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           const hotResult = await feeds.fetchPopularFeed(agent, { limit: 30 });
           allPosts = hotResult.posts.map((p) => ({
             ...p,
-            matchedTopics: [{ topicId: 'trending', score: 0 }],
+            matchedTopics: [{ topicId: "trending", score: 0 }],
           }));
-          setCursorCache('whats-hot', hotResult.cursor ?? null);
+          setCursorCache("whats-hot", hotResult.cursor ?? null);
         } catch {
-          const timelineResult = await feeds.fetchHomeFeed(agent, { limit: 30 });
+          const timelineResult = await feeds.fetchHomeFeed(agent, {
+            limit: 30,
+          });
           allPosts = timelineResult.posts.map((p) => ({
             ...p,
-            matchedTopics: [{ topicId: 'trending', score: 0 }],
+            matchedTopics: [{ topicId: "trending", score: 0 }],
           }));
-          setCursorCache('timeline', timelineResult.cursor ?? null);
+          setCursorCache("timeline", timelineResult.cursor ?? null);
         }
 
         const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
@@ -489,6 +615,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         cursor: null,
         loading: false,
         displayCount: 15,
+        nsfwPostUris: new Set(),
       });
 
       // Apply moderation rules during browser idle time so it doesn't
@@ -499,25 +626,47 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
       if (allPosts.length > 0) {
         const runModeration = () => {
           applyModerationRules(agent, allPosts, (progress) => {
-            // Progressive update: hide rule-matching posts as each chunk
-            // resolves instead of waiting for the full sweep.
             set({ moderatedPostUris: progress });
-          }).then(({ moderatedPostUris }) => {
-            if (moderatedPostUris.size > 0) {
-              set({ moderatedPostUris });
-            }
-          }).catch(() => {});
+          })
+            .then(({ moderatedPostUris }) => {
+              if (moderatedPostUris.size > 0) {
+                set({ moderatedPostUris });
+              }
+            })
+            .catch(() => {});
         };
-        if (typeof requestIdleCallback === 'function') {
+        if (typeof requestIdleCallback === "function") {
           requestIdleCallback(runModeration, { timeout: 2000 });
         } else {
           setTimeout(runModeration, 100);
+        }
+
+        const runNsfw = () => {
+          applyNsfwFilter(allPosts)
+            .then((nsfwPostUris) => {
+              if (nsfwPostUris.size > 0) {
+                set({
+                  nsfwPostUris: new Set([
+                    ...get().nsfwPostUris,
+                    ...nsfwPostUris,
+                  ]),
+                });
+              }
+            })
+            .catch((err) => {
+              console.warn("NSFW filter failed in loadFeed:", err);
+            });
+        };
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(runNsfw, { timeout: 5000 });
+        } else {
+          setTimeout(runNsfw, 500);
         }
       }
     } catch (err) {
       set({
         loading: false,
-        error: err instanceof Error ? err.message : 'Failed to load feed',
+        error: err instanceof Error ? err.message : "Failed to load feed",
       });
     }
   },
@@ -554,11 +703,17 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         const allTopics = useTopicStore.getState().topics;
         const followedTopics = allTopics.filter((t) => followedIds.has(t.id));
         for (const topic of followedTopics) {
-          const effectiveSeedTerms = getEffectiveSeedTerms(topic, topicFeedsState.customizationsByTopic);
+          const effectiveSeedTerms = getEffectiveSeedTerms(
+            topic,
+            topicFeedsState.customizationsByTopic,
+          );
           for (const term of effectiveSeedTerms.slice(0, 3)) {
             const cursor = feedCursors.get(`search:${topic.id}:${term}`);
             if (cursor) {
-              feedsWithCursor.push({ topicId: topic.id, feedUri: `search:${topic.id}:${term}` });
+              feedsWithCursor.push({
+                topicId: topic.id,
+                feedUri: `search:${topic.id}:${term}`,
+              });
             }
           }
         }
@@ -573,16 +728,23 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
               feedsWithCursor,
               async ({ topicId, feedUri }) => {
                 const cursor = feedCursors.get(feedUri);
-                if (!cursor) return { topicId, feedUri, posts: [] as EnrichedPost[] };
+                if (!cursor)
+                  return { topicId, feedUri, posts: [] as EnrichedPost[] };
 
-                if (feedUri.startsWith('search:')) {
-                  const [, , term] = feedUri.split(':');
-                  const result = await feeds.searchPosts(agent, term, { limit: 10, cursor });
+                if (feedUri.startsWith("search:")) {
+                  const [, , term] = feedUri.split(":");
+                  const result = await feeds.searchPosts(agent, term, {
+                    limit: 10,
+                    cursor,
+                  });
                   setCursorCache(feedUri, result.cursor ?? null);
                   return { topicId, feedUri, posts: result.posts };
                 }
 
-                const result = await feeds.fetchCustomFeed(agent, feedUri, { limit: 10, cursor });
+                const result = await feeds.fetchCustomFeed(agent, feedUri, {
+                  limit: 10,
+                  cursor,
+                });
                 setCursorCache(feedUri, result.cursor ?? null);
                 return { topicId, feedUri, posts: result.posts };
               },
@@ -594,7 +756,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
             const otherNewPosts: EnrichedPost[] = [];
 
             for (const r of fetchResults) {
-              if (r.status === 'rejected') continue;
+              if (r.status === "rejected") continue;
               const { topicId, feedUri, posts: resultPosts } = r.value;
 
               for (const post of resultPosts) {
@@ -607,7 +769,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
 
                 // Feed generator posts: group by feedUri for interleaving.
                 // Search/hashtag posts: collect separately.
-                if (feedUri && !feedUri.startsWith('search:')) {
+                if (feedUri && !feedUri.startsWith("search:")) {
                   let list = feedGenPostsByFeed.get(feedUri);
                   if (!list) {
                     list = [];
@@ -631,6 +793,28 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
                 posts: [...posts, ...newPosts],
                 loading: false,
               });
+
+              // Apply NSFW filter to newly loaded posts
+              const runNsfwOnMore = () => {
+                applyNsfwFilter(newPosts)
+                  .then((newNsfwUris) => {
+                    if (newNsfwUris.size > 0) {
+                      set({
+                        nsfwPostUris: new Set([
+                          ...get().nsfwPostUris,
+                          ...newNsfwUris,
+                        ]),
+                      });
+                    }
+                  })
+                  .catch(() => {});
+              };
+              if (typeof requestIdleCallback === "function") {
+                requestIdleCallback(runNsfwOnMore, { timeout: 5000 });
+              } else {
+                setTimeout(runNsfwOnMore, 500);
+              }
+
               return;
             }
           } catch {
@@ -640,21 +824,24 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         }
       } else {
         // No topics — try What's Hot / timeline cursor
-        const hotCursor = feedCursors.get('whats-hot');
-        const timelineCursor = feedCursors.get('timeline');
+        const hotCursor = feedCursors.get("whats-hot");
+        const timelineCursor = feedCursors.get("timeline");
         const cursor = hotCursor ?? timelineCursor;
-        const source = hotCursor ? 'whats-hot' : 'timeline';
+        const source = hotCursor ? "whats-hot" : "timeline";
 
         if (cursor) {
           set({ loading: true });
           try {
             let result;
-            if (source === 'whats-hot') {
-              result = await feeds.fetchPopularFeed(agent, { limit: 15, cursor });
-              setCursorCache('whats-hot', result.cursor ?? null);
+            if (source === "whats-hot") {
+              result = await feeds.fetchPopularFeed(agent, {
+                limit: 15,
+                cursor,
+              });
+              setCursorCache("whats-hot", result.cursor ?? null);
             } else {
               result = await feeds.fetchHomeFeed(agent, { limit: 15, cursor });
-              setCursorCache('timeline', result.cursor ?? null);
+              setCursorCache("timeline", result.cursor ?? null);
             }
 
             const seen = new Set(posts.map((p) => p.uri));
@@ -662,7 +849,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
               .filter((p) => !seen.has(p.uri))
               .map((p) => ({
                 ...p,
-                matchedTopics: [{ topicId: 'trending', score: 0 }],
+                matchedTopics: [{ topicId: "trending", score: 0 }],
               }));
 
             if (newPosts.length > 0) {
@@ -670,6 +857,28 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
                 posts: [...posts, ...newPosts],
                 loading: false,
               });
+
+              // Apply NSFW filter to newly loaded posts
+              const runNsfwOnMore = () => {
+                applyNsfwFilter(newPosts)
+                  .then((newNsfwUris) => {
+                    if (newNsfwUris.size > 0) {
+                      set({
+                        nsfwPostUris: new Set([
+                          ...get().nsfwPostUris,
+                          ...newNsfwUris,
+                        ]),
+                      });
+                    }
+                  })
+                  .catch(() => {});
+              };
+              if (typeof requestIdleCallback === "function") {
+                requestIdleCallback(runNsfwOnMore, { timeout: 5000 });
+              } else {
+                setTimeout(runNsfwOnMore, 500);
+              }
+
               return;
             }
           } catch {
@@ -725,14 +934,16 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
     }
 
     const postsByUri = new Map(posts.map((p) => [p.uri, p]));
-    const updatedPosts = new Map(posts.map((p) => [p.uri, { ...p, matchedTopics: [...p.matchedTopics] }]));
+    const updatedPosts = new Map(
+      posts.map((p) => [p.uri, { ...p, matchedTopics: [...p.matchedTopics] }]),
+    );
 
     for (const [topicId, uris] of postsByTopic) {
       const topic = topicMap.get(topicId);
       if (!topic) continue;
 
       const texts = uris
-        .map((uri) => postsByUri.get(uri)?.text ?? '')
+        .map((uri) => postsByUri.get(uri)?.text ?? "")
         .filter((t) => t.trim());
 
       if (texts.length === 0) continue;
@@ -742,7 +953,9 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
       for (let i = 0; i < uris.length && i < scores.length; i++) {
         const post = updatedPosts.get(uris[i]);
         if (!post) continue;
-        const matchIndex = post.matchedTopics.findIndex((m) => m.topicId === topicId);
+        const matchIndex = post.matchedTopics.findIndex(
+          (m) => m.topicId === topicId,
+        );
         if (matchIndex >= 0) {
           post.matchedTopics[matchIndex] = { topicId, score: scores[i] };
         }
@@ -766,31 +979,31 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
   upvote: async (post) => {
     const { agent } = useAuthStore.getState();
     if (!agent) {
-      console.warn('Cannot upvote: no agent (session not restored yet?)');
+      console.warn("Cannot upvote: no agent (session not restored yet?)");
       return;
     }
     if (get().upvotedPostUris.has(post.uri)) return;
 
-      try {
+    try {
       await feeds.likePost(agent, post.uri, post.cid);
       const newUpvoted = new Set(get().upvotedPostUris);
       newUpvoted.add(post.uri);
       set({ upvotedPostUris: newUpvoted });
     } catch (err) {
-      console.error('Failed to like post:', err);
+      console.error("Failed to like post:", err);
     }
   },
 
   downvote: async (post) => {
     const { agent } = useAuthStore.getState();
     if (!agent) {
-      console.warn('Cannot downvote: no agent (session not restored yet?)');
+      console.warn("Cannot downvote: no agent (session not restored yet?)");
       return;
     }
 
     try {
       // Hide the post locally
-      await records.hidePost(agent, post.uri, 'downvote');
+      await records.hidePost(agent, post.uri, "downvote");
       // Mute the user
       await feeds.muteUser(agent, post.author.did);
 
@@ -798,7 +1011,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
       newHidden.add(post.uri);
       set({ hiddenPostUris: newHidden });
     } catch (err) {
-      console.error('Failed to downvote:', err);
+      console.error("Failed to downvote:", err);
     }
   },
 }));
