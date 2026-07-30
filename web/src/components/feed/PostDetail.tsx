@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import Link from 'next/link';
 import type { PostThread, ThreadComment } from '@/types';
 import TopicBadge from '@/components/topics/TopicBadge';
@@ -17,7 +17,7 @@ interface PostDetailProps {
   upvotedUris?: Set<string>;
 }
 
-export default function PostDetail({
+const PostDetail = memo(function PostDetail({
   thread,
   onUpvote,
   onDownvote,
@@ -120,6 +120,8 @@ export default function PostDetail({
               <img
                 src={post.embed!.external.thumb}
                 alt=""
+                loading="lazy"
+                decoding="async"
                 className="w-full h-48 object-cover"
               />
             )}
@@ -145,6 +147,8 @@ export default function PostDetail({
             <img
               src={post.embed!.images[0].fullsize}
               alt={post.embed!.images[0].alt}
+              loading="lazy"
+              decoding="async"
               className="w-full max-h-96 object-cover"
             />
           </div>
@@ -309,7 +313,9 @@ export default function PostDetail({
       </div>
     </div>
   );
-}
+});
+
+export default PostDetail;
 
 function formatTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);

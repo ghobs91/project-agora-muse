@@ -1,12 +1,13 @@
 'use client';
 
+import { memo } from 'react';
 import { useTopicStore } from '@/lib/store/topic-store';
 
 interface TopicFollowButtonProps {
   topicId: string;
 }
 
-export default function TopicFollowButton({ topicId }: TopicFollowButtonProps) {
+const TopicFollowButton = memo(function TopicFollowButton({ topicId }: TopicFollowButtonProps) {
   const { isFollowing, followTopic, unfollowTopic } = useTopicStore();
   const following = isFollowing(topicId);
 
@@ -22,4 +23,6 @@ export default function TopicFollowButton({ topicId }: TopicFollowButtonProps) {
       {following ? 'Following' : 'Follow'}
     </button>
   );
-}
+});
+
+export default TopicFollowButton;

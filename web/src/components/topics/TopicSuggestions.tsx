@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import type { Topic } from '@/types';
 import { suggestTopics } from '@/lib/llm/topic-matcher';
 import { useTopicStore } from '@/lib/store/topic-store';
@@ -11,7 +11,7 @@ interface TopicSuggestionsProps {
   selectedTopics: Topic[];
 }
 
-export default function TopicSuggestions({
+const TopicSuggestions = memo(function TopicSuggestions({
   content,
   onSelect,
   selectedTopics,
@@ -75,4 +75,6 @@ export default function TopicSuggestions({
       </div>
     </div>
   );
-}
+});
+
+export default TopicSuggestions;

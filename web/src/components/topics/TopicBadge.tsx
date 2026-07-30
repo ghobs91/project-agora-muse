@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTopicStore } from '@/lib/store/topic-store';
 import { isStaticTopicId } from '@/lib/data/topics';
@@ -10,7 +11,7 @@ interface TopicBadgeProps {
   className?: string;
 }
 
-export default function TopicBadge({ topicId, score, className }: TopicBadgeProps) {
+const TopicBadge = memo(function TopicBadge({ topicId, score, className }: TopicBadgeProps) {
   const topic = useTopicStore((s) => s.topics.find((t) => t.id === topicId));
   const router = useRouter();
 
@@ -51,4 +52,6 @@ export default function TopicBadge({ topicId, score, className }: TopicBadgeProp
       )}
     </span>
   );
-}
+});
+
+export default TopicBadge;

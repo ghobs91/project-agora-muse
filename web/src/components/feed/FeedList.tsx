@@ -1,18 +1,25 @@
-'use client';
+"use client";
 
-import { useEffect, useCallback, useRef, useState, useMemo, useLayoutEffect } from 'react';
-import { useWindowVirtualizer } from '@tanstack/react-virtual';
-import { useFeedStore } from '@/lib/store/feed-store';
-import { useAuthStore } from '@/lib/store/auth-store';
-import { useTopicStore } from '@/lib/store/topic-store';
-import { useLLMStore } from '@/lib/store/llm-store';
-import { useCompactViewStore } from '@/lib/store/compact-view-store';
-import * as feeds from '@/lib/atproto/feeds';
-import { isWebLLMLoaded, detectLanguageInBatch } from '@/lib/llm/web-llm';
-import PostCard from './PostCard';
+import {
+  useEffect,
+  useCallback,
+  useRef,
+  useState,
+  useMemo,
+  useLayoutEffect,
+} from "react";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
+import { useFeedStore } from "@/lib/store/feed-store";
+import { useAuthStore } from "@/lib/store/auth-store";
+import { useTopicStore } from "@/lib/store/topic-store";
+import { useLLMStore } from "@/lib/store/llm-store";
+import { useCompactViewStore } from "@/lib/store/compact-view-store";
+import * as feeds from "@/lib/atproto/feeds";
+import { isWebLLMLoaded, detectLanguageInBatch } from "@/lib/llm/web-llm";
+import PostCard from "./PostCard";
 
 /** Latin-script languages that benefit from a non-Latin script heuristic fallback */
-const LATIN_LANGS = new Set(['en', 'es', 'pt', 'de', 'fr']);
+const LATIN_LANGS = new Set(["en", "es", "pt", "de", "fr"]);
 
 /**
  * Quick heuristic: returns true if >25% of script-identifiable characters
@@ -27,41 +34,58 @@ function isNonLatinScript(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     // Skip whitespace
-    if (c === 0x0020 || c === 0x0009 || c === 0x000A || c === 0x000D) continue;
+    if (c === 0x0020 || c === 0x0009 || c === 0x000a || c === 0x000d) continue;
     // Skip ASCII digits
     if (c >= 0x0030 && c <= 0x0039) continue;
     // Skip ASCII punctuation and symbols
-    if ((c >= 0x0021 && c <= 0x002F) || (c >= 0x003A && c <= 0x0040) ||
-        (c >= 0x005B && c <= 0x0060) || (c >= 0x007B && c <= 0x007E)) continue;
+    if (
+      (c >= 0x0021 && c <= 0x002f) ||
+      (c >= 0x003a && c <= 0x0040) ||
+      (c >= 0x005b && c <= 0x0060) ||
+      (c >= 0x007b && c <= 0x007e)
+    )
+      continue;
     // Skip common Unicode punctuation ranges (General Punctuation, CJK punctuation)
-    if ((c >= 0x2000 && c <= 0x206F) || (c >= 0x3000 && c <= 0x303F) ||
-        (c >= 0xFF00 && c <= 0xFF0F) || (c >= 0xFF1A && c <= 0xFF20) ||
-        (c >= 0xFF3B && c <= 0xFF40) || (c >= 0xFF5B && c <= 0xFF65)) continue;
+    if (
+      (c >= 0x2000 && c <= 0x206f) ||
+      (c >= 0x3000 && c <= 0x303f) ||
+      (c >= 0xff00 && c <= 0xff0f) ||
+      (c >= 0xff1a && c <= 0xff20) ||
+      (c >= 0xff3b && c <= 0xff40) ||
+      (c >= 0xff5b && c <= 0xff65)
+    )
+      continue;
 
     // ── Latin script ranges ────────────────────────────────────
     if (
-      (c >= 0x0041 && c <= 0x005A) || // A-Z
-      (c >= 0x0061 && c <= 0x007A) || // a-z
-      (c >= 0x00C0 && c <= 0x00FF) || // Latin-1 Supplement letters
-      (c >= 0x0100 && c <= 0x024F) || // Latin Extended-A/B
-      (c >= 0x1E00 && c <= 0x1EFF)    // Latin Extended Additional
-    ) { latin++; continue; }
+      (c >= 0x0041 && c <= 0x005a) || // A-Z
+      (c >= 0x0061 && c <= 0x007a) || // a-z
+      (c >= 0x00c0 && c <= 0x00ff) || // Latin-1 Supplement letters
+      (c >= 0x0100 && c <= 0x024f) || // Latin Extended-A/B
+      (c >= 0x1e00 && c <= 0x1eff) // Latin Extended Additional
+    ) {
+      latin++;
+      continue;
+    }
 
     // ── Definitely non-Latin script ranges ─────────────────────
     if (
-      (c >= 0x4E00 && c <= 0x9FFF) || // CJK Unified Ideographs
-      (c >= 0x3400 && c <= 0x4DBF) || // CJK Extension A
-      (c >= 0x3040 && c <= 0x309F) || // Hiragana
-      (c >= 0x30A0 && c <= 0x30FF) || // Katakana
-      (c >= 0xAC00 && c <= 0xD7AF) || // Hangul Syllables
-      (c >= 0x0400 && c <= 0x04FF) || // Cyrillic
-      (c >= 0x0600 && c <= 0x06FF) || // Arabic
-      (c >= 0x0750 && c <= 0x077F) || // Arabic Supplement
-      (c >= 0x0900 && c <= 0x097F) || // Devanagari
-      (c >= 0x0E00 && c <= 0x0E7F) || // Thai
-      (c >= 0x0370 && c <= 0x03FF) || // Greek
-      (c >= 0x0590 && c <= 0x05FF)    // Hebrew
-    ) { foreign++; continue; }
+      (c >= 0x4e00 && c <= 0x9fff) || // CJK Unified Ideographs
+      (c >= 0x3400 && c <= 0x4dbf) || // CJK Extension A
+      (c >= 0x3040 && c <= 0x309f) || // Hiragana
+      (c >= 0x30a0 && c <= 0x30ff) || // Katakana
+      (c >= 0xac00 && c <= 0xd7af) || // Hangul Syllables
+      (c >= 0x0400 && c <= 0x04ff) || // Cyrillic
+      (c >= 0x0600 && c <= 0x06ff) || // Arabic
+      (c >= 0x0750 && c <= 0x077f) || // Arabic Supplement
+      (c >= 0x0900 && c <= 0x097f) || // Devanagari
+      (c >= 0x0e00 && c <= 0x0e7f) || // Thai
+      (c >= 0x0370 && c <= 0x03ff) || // Greek
+      (c >= 0x0590 && c <= 0x05ff) // Hebrew
+    ) {
+      foreign++;
+      continue;
+    }
 
     // Everything else: emoji, symbols, math — skip (script-neutral)
   }
@@ -71,27 +95,27 @@ function isNonLatinScript(text: string): boolean {
 }
 
 const LANGUAGES: { code: string; label: string }[] = [
-  { code: '', label: 'All languages' },
-  { code: 'en', label: 'English' },
-  { code: 'ja', label: '日本語' },
-  { code: 'es', label: 'Español' },
-  { code: 'pt', label: 'Português' },
-  { code: 'de', label: 'Deutsch' },
-  { code: 'fr', label: 'Français' },
-  { code: 'ko', label: '한국어' },
-  { code: 'zh', label: '中文' },
-  { code: 'ru', label: 'Русский' },
+  { code: "", label: "All languages" },
+  { code: "en", label: "English" },
+  { code: "ja", label: "日本語" },
+  { code: "es", label: "Español" },
+  { code: "pt", label: "Português" },
+  { code: "de", label: "Deutsch" },
+  { code: "fr", label: "Français" },
+  { code: "ko", label: "한국어" },
+  { code: "zh", label: "中文" },
+  { code: "ru", label: "Русский" },
 ];
 
-const LANG_PREF_KEY = 'agora-muse-lang';
+const LANG_PREF_KEY = "agora-muse-lang";
 
 function getStoredLang(): string {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem(LANG_PREF_KEY) ?? '';
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(LANG_PREF_KEY) ?? "";
 }
 
 function setStoredLang(code: string) {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   localStorage.setItem(LANG_PREF_KEY, code);
 }
 
@@ -102,6 +126,7 @@ export default function FeedList() {
   const hiddenPostUris = useFeedStore((s) => s.hiddenPostUris);
   const displayCount = useFeedStore((s) => s.displayCount);
   const moderatedPostUris = useFeedStore((s) => s.moderatedPostUris);
+  const nsfwPostUris = useFeedStore((s) => s.nsfwPostUris);
   const loadFeed = useFeedStore((s) => s.loadFeed);
   const loadMore = useFeedStore((s) => s.loadMore);
   const loadHiddenPosts = useFeedStore((s) => s.loadHiddenPosts);
@@ -121,11 +146,13 @@ export default function FeedList() {
 
   // ─── LLM-powered language detection ────────────────────────────────
   const llmStatus = useLLMStore((s) => s.status);
-  const [llmLangMismatchUris, setLlmLangMismatchUris] = useState<Set<string>>(new Set());
-  const [llmLangKick, setLlmLangKick] = useState(0);
+  const [llmLangMismatchUris, setLlmLangMismatchUris] = useState<Set<string>>(
+    new Set(),
+  );
   const llmLangProcessingRef = useRef(false);
-  const lastLangRef = useRef<string>('');
+  const lastLangRef = useRef<string>("");
   const checkedUrisRef = useRef<Set<string>>(new Set());
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep a ref synced with current lang so async callbacks can read it
   const langRef = useRef(lang);
@@ -133,11 +160,10 @@ export default function FeedList() {
     langRef.current = lang;
   });
 
-  // Run LLM language detection in background when posts, language, or LLM readiness changes
+  // Run LLM language detection in background. Debounced (300ms) so rapid
+  // feed-load posts-churn doesn't flood the WebLLM with inference calls.
   useEffect(() => {
     if (!lang || posts.length === 0) return;
-    // Only run when the WebLLM engine (Gemma/Llama) is loaded — the embedding
-    // model can't do language classification
     if (!isWebLLMLoaded()) return;
 
     // Always sync language changes (reset state) even if we can't process right now
@@ -147,88 +173,103 @@ export default function FeedList() {
       setLlmLangMismatchUris(new Set());
     }
 
-    // If another check is in flight, skip — llmLangKick will re-trigger us after
     if (llmLangProcessingRef.current) return;
 
-    const postsToCheck = posts.filter((p) => !checkedUrisRef.current.has(p.uri));
+    const postsToCheck = posts.filter(
+      (p) => !checkedUrisRef.current.has(p.uri),
+    );
     if (postsToCheck.length === 0) return;
 
-    llmLangProcessingRef.current = true;
-    const requestedLang = lang;
+    // Debounce: wait 300ms for posts to settle before firing inference
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      llmLangProcessingRef.current = true;
+      const requestedLang = lang;
 
-    detectLanguageInBatch(
-      postsToCheck.map((p) => p.text),
-      requestedLang,
-    )
-      .then((results) => {
-        // Discard if language changed while the LLM was processing
-        if (requestedLang !== langRef.current) return;
+      detectLanguageInBatch(
+        postsToCheck.map((p) => p.text),
+        requestedLang,
+      )
+        .then((results) => {
+          if (requestedLang !== langRef.current) return;
 
-        const mismatched = new Set<string>();
-        for (let i = 0; i < postsToCheck.length; i++) {
-          checkedUrisRef.current.add(postsToCheck[i].uri);
-          if (!results[i]) {
-            mismatched.add(postsToCheck[i].uri);
-          }
-        }
-
-        setLlmLangMismatchUris((prev) => {
-          const next = new Set(prev);
-          for (const p of postsToCheck) {
-            if (mismatched.has(p.uri)) {
-              next.add(p.uri);
-            } else {
-              next.delete(p.uri);
+          const mismatched = new Set<string>();
+          for (let i = 0; i < postsToCheck.length; i++) {
+            checkedUrisRef.current.add(postsToCheck[i].uri);
+            if (!results[i]) {
+              mismatched.add(postsToCheck[i].uri);
             }
           }
-          return next;
+
+          setLlmLangMismatchUris((prev) => {
+            const next = new Set(prev);
+            for (const p of postsToCheck) {
+              if (mismatched.has(p.uri)) {
+                next.add(p.uri);
+              } else {
+                next.delete(p.uri);
+              }
+            }
+            return next;
+          });
+        })
+        .catch(() => {
+          // Silently fail — the langs-field filter is still active
+        })
+        .finally(() => {
+          llmLangProcessingRef.current = false;
         });
-      })
-      .catch(() => {
-        // Silently fail — the langs-field filter is still active
-      })
-      .finally(() => {
-        llmLangProcessingRef.current = false;
-        // Kick another effect run in case we skipped a language change
-        setLlmLangKick((k) => k + 1);
-      });
-  }, [lang, posts, llmStatus, llmLangKick]);
+    }, 300);
 
-  // Visible posts (filter out hidden, moderated, posts without topic matches, by language, and LLM-detected language mismatches), sliced to current display count
-  // Shared language filter: explicit langs match > explicit mismatch > heuristic
-  const langFilter = useMemo(() => {
-    if (!lang) return () => true;
-    // For all languages: if the post declares any language at all, use it.
-    // If the post didn't declare a language, apply the non-Latin script
-    // heuristic for Latin-script targets (catches CJK/Cyrillic/Arabic/etc).
-    const isLatinLang = LATIN_LANGS.has(lang);
-    return (p: typeof posts[number]) => {
-      // Explicit match — post declares our language
-      if (p.langs?.includes(lang)) return true;
-      // Explicit mismatch — post declares other languages
-      if ((p.langs?.length ?? 0) > 0) return false;
-      // No langs field — apply heuristic for Latin-script languages
-      if (isLatinLang && isNonLatinScript(p.text)) return false;
-      return true;
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
     };
-  }, [lang]);
+  }, [lang, posts, llmStatus]);
 
-  const visiblePosts = useMemo(
-    () =>
-      posts
-        .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0 && !llmLangMismatchUris.has(p.uri))
-        .filter(langFilter)
-        .slice(0, displayCount),
-    [posts, hiddenPostUris, moderatedPostUris, displayCount, langFilter, llmLangMismatchUris],
-  );
+  // Single-pass filter: inline all checks to avoid intermediate array
+  // allocations from chained .filter() calls.
+  const { visiblePosts, allVisible } = useMemo(() => {
+    const hasLang = !!lang;
+    const isLatinLang = hasLang ? LATIN_LANGS.has(lang) : false;
+    const result: typeof posts = [];
+    const limit = displayCount;
+    let total = 0;
 
-  const allVisible = useMemo(
-    () =>
-      posts
-        .filter((p) => !hiddenPostUris.has(p.uri) && !moderatedPostUris.has(p.uri) && p.matchedTopics.length > 0 && !llmLangMismatchUris.has(p.uri))
-        .filter(langFilter).length,
-    [posts, hiddenPostUris, moderatedPostUris, langFilter, llmLangMismatchUris],
-  );
+    for (let i = 0; i < posts.length; i++) {
+      const p = posts[i];
+      if (
+        hiddenPostUris.has(p.uri) ||
+        moderatedPostUris.has(p.uri) ||
+        nsfwPostUris.has(p.uri) ||
+        p.matchedTopics.length === 0 ||
+        llmLangMismatchUris.has(p.uri)
+      )
+        continue;
+
+      if (hasLang) {
+        if (p.langs?.includes(lang)) {
+          /* pass */
+        } else if ((p.langs?.length ?? 0) > 0) continue;
+        else if (isLatinLang && isNonLatinScript(p.text)) continue;
+      }
+
+      total++;
+      if (result.length < limit) result.push(p);
+    }
+
+    return { visiblePosts: result, allVisible: total };
+  }, [
+    posts,
+    hiddenPostUris,
+    moderatedPostUris,
+    nsfwPostUris,
+    displayCount,
+    lang,
+    llmLangMismatchUris,
+  ]);
   const hasMore = displayCount < allVisible;
 
   // Virtualized list for window scroll
@@ -241,8 +282,8 @@ export default function FeedList() {
       setParentOffset(rect.top + window.scrollY);
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
   }, []);
 
   const virtualizer = useWindowVirtualizer({
@@ -250,11 +291,15 @@ export default function FeedList() {
     getItemKey: (index) => visiblePosts[index].uri,
     estimateSize: (index) => {
       const post = visiblePosts[index];
-      const hasImage = post.embed?.type === 'image' && (post.embed.images?.length ?? 0) > 0;
-      const hasExternal = post.embed?.type === 'external' && post.embed.external;
+      const hasImage =
+        post.embed?.type === "image" && (post.embed.images?.length ?? 0) > 0;
+      const hasExternal =
+        post.embed?.type === "external" && post.embed.external;
       // Posts with media/embeds are taller; over-estimate to prevent overlap
       // before the ResizeObserver measurement kicks in.
-      return hasImage || hasExternal ? 520 : 340;
+      // Card view uses aspect-[4/3] images which are ~450px at typical widths,
+      // plus ~180px for content/chrome.
+      return hasImage || hasExternal ? 650 : 340;
     },
     overscan: 5,
     scrollMargin: parentOffset,
@@ -288,12 +333,15 @@ export default function FeedList() {
     const stored = getStoredLang();
     if (stored) return; // user already set a preference
 
-    feeds.getUserPreferredLanguage(agent).then((prefLang) => {
-      if (prefLang) {
-        setLang(prefLang);
-        setStoredLang(prefLang);
-      }
-    }).catch(() => {});
+    feeds
+      .getUserPreferredLanguage(agent)
+      .then((prefLang) => {
+        if (prefLang) {
+          setLang(prefLang);
+          setStoredLang(prefLang);
+        }
+      })
+      .catch(() => {});
   }, [isAuthenticated, agent]);
 
   // Infinite scroll with IntersectionObserver
@@ -312,7 +360,7 @@ export default function FeedList() {
     if (!el || !hasMore) return;
 
     const observer = new IntersectionObserver(handleObserver, {
-      rootMargin: '200px',
+      rootMargin: "200px",
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -405,8 +453,8 @@ export default function FeedList() {
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-text-500 font-medium">View</span>
               <select
-                value={compact ? 'compact' : 'card'}
-                onChange={(e) => setCompact(e.target.value === 'compact')}
+                value={compact ? "compact" : "card"}
+                onChange={(e) => setCompact(e.target.value === "compact")}
                 className="select-dark text-xs"
               >
                 <option value="card">Card View</option>
@@ -414,19 +462,26 @@ export default function FeedList() {
               </select>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-text-500 font-medium">Language</span>
+              <span className="text-xs text-text-500 font-medium">
+                Language
+              </span>
               <select
                 value={lang}
                 onChange={(e) => {
                   const code = e.target.value;
                   setLang(code);
                   setStoredLang(code);
-                  window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+                  window.scrollTo({
+                    top: 0,
+                    behavior: "instant" as ScrollBehavior,
+                  });
                 }}
                 className="select-dark text-xs"
               >
                 {LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code}>{l.label}</option>
+                  <option key={l.code} value={l.code}>
+                    {l.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -439,8 +494,8 @@ export default function FeedList() {
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
-            width: '100%',
-            position: 'relative',
+            width: "100%",
+            position: "relative",
           }}
         >
           {virtualItems.map((virtualRow) => {
@@ -451,19 +506,19 @@ export default function FeedList() {
                 data-index={virtualRow.index}
                 ref={virtualizer.measureElement}
                 style={{
-                  position: 'absolute',
+                  position: "absolute",
                   top: 0,
                   left: 0,
-                  width: '100%',
+                  width: "100%",
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
                 <div className="mb-2">
-      <PostCard
-        post={post}
-        onUpvote={upvote}
-        onDownvote={downvote}
-      />
+                  <PostCard
+                    post={post}
+                    onUpvote={upvote}
+                    onDownvote={downvote}
+                  />
                 </div>
               </div>
             );

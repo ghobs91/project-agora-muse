@@ -1,16 +1,18 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useModerationStore } from '@/lib/store/moderation-store';
 import Header from '@/components/layout/Header';
 import ModerationRuleEditor from '@/components/moderation/ModerationRuleEditor';
 import LLMStatusIndicator from '@/components/moderation/LLMStatusIndicator';
 import ThemeToggle from '@/components/theme/ThemeToggle';
+import { isNsfwFilterEnabled, setNsfwFilterEnabled } from '@/lib/nsfw/detector';
 
 export default function ModerationPage() {
   const { isAuthenticated, restoreSession, loading: authLoading } = useAuthStore();
   const { rules, loadRules } = useModerationStore();
+  const [nsfwEnabled, setNsfwEnabled] = useState(false);
 
   useEffect(() => {
     restoreSession();
@@ -21,6 +23,16 @@ export default function ModerationPage() {
       loadRules();
     }
   }, [isAuthenticated, loadRules]);
+
+  useEffect(() => {
+    setNsfwEnabled(isNsfwFilterEnabled());
+  }, []);
+
+  const toggleNsfw = useCallback(() => {
+    const next = !nsfwEnabled;
+    setNsfwFilterEnabled(next);
+    setNsfwEnabled(next);
+  }, [nsfwEnabled]);
 
   if (authLoading) {
     return (
@@ -64,6 +76,31 @@ export default function ModerationPage() {
                 <p className="text-sm text-text-500">Switch between dark and light mode</p>
               </div>
               <ThemeToggle />
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-semibold text-text-100 mb-3">Content Filtering</h2>
+            <div className="card flex items-center justify-between">
+              <div>
+                <p className="text-base font-medium text-text-200">Filter nudity</p>
+                <p className="text-sm text-text-500">Automatically hide posts containing nudity or explicit content</p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleNsfw}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
+                  nsfwEnabled ? 'bg-sky-500' : 'bg-dark-600'
+                }`}
+                role="switch"
+                aria-checked={nsfwEnabled}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    nsfwEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
           </div>
 

@@ -4,9 +4,16 @@ import { useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useTopicStore } from '@/lib/store/topic-store';
 import { useModerationStore } from '@/lib/store/moderation-store';
+import { setNsfwFilterEnabled } from '@/lib/nsfw/detector';
 import TopicFollowButton from '@/components/topics/TopicFollowButton';
+import { markOnboardingComplete } from '@/components/onboarding/onboarding-storage';
 
-const ONBOARDING_KEY = 'agora-muse-onboarded';
+// Re-export storage helpers so existing named imports keep working.
+export {
+  ONBOARDING_KEY,
+  isOnboardingComplete,
+  markOnboardingComplete,
+} from '@/components/onboarding/onboarding-storage';
 
 const SUGGESTED_FILTERS = [
   { value: 'ragebait — posts designed to provoke outrage or anger', label: 'Ragebait' },
@@ -23,24 +30,6 @@ interface OnboardingWizardProps {
   onComplete: () => void;
 }
 
-export { ONBOARDING_KEY };
-
-export function isOnboardingComplete(): boolean {
-  if (typeof window === 'undefined') return true;
-  try {
-    return localStorage.getItem(ONBOARDING_KEY) === '1';
-  } catch {
-    return true;
-  }
-}
-
-export function markOnboardingComplete(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(ONBOARDING_KEY, '1');
-  } catch { /* ignore */ }
-}
-
 export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const topics = useTopicStore((s) => s.topics.filter((t) => !t.isCustom));
   const { followTopic } = useTopicStore();
@@ -49,6 +38,7 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
   const [step, setStep] = useState(1);
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
+  const [nsfwEnabled, setNsfwEnabled] = useState(false);
   const [finishing, setFinishing] = useState(false);
 
   const toggleTopic = (id: string) => {
@@ -86,6 +76,7 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
           });
         } catch { /* skip individual failures */ }
       }
+      setNsfwFilterEnabled(nsfwEnabled);
       markOnboardingComplete();
       onComplete();
     } finally {
@@ -221,6 +212,30 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
                     </button>
                   );
                 })}
+              </div>
+
+              <div className="mt-4 p-4 rounded-lg border border-dark-700/50">
+                <button
+                  type="button"
+                  onClick={() => setNsfwEnabled(!nsfwEnabled)}
+                  className="w-full flex items-center gap-3 text-left"
+                >
+                  <div
+                    className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                      nsfwEnabled ? 'border-red-400 bg-red-500/30' : 'border-dark-600'
+                    }`}
+                  >
+                    {nsfwEnabled && (
+                      <Icon icon="lucide:check" className="w-3.5 h-3.5 text-red-300" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-text-200">Filter nudity</div>
+                    <div className="text-xs text-text-500 mt-0.5">
+                      Automatically hide posts containing nudity or explicit images
+                    </div>
+                  </div>
+                </button>
               </div>
 
               <div className="mt-4 flex justify-between">

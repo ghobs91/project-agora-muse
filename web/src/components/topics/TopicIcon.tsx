@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { Icon, addCollection, listIcons } from '@iconify/react';
 import lucideIcons from '@iconify-json/lucide/icons.json';
 import { TOPIC_ICONS, TOPIC_COLORS, findBestMatchingTopicId } from '@/lib/data/topics';
@@ -79,7 +79,7 @@ function findBestLucideIcon(topicName: string, seedTerms?: string[]): string | n
 
   const result = bestIcon;
   if (lucideCache.size >= MAX_LUCIDE_CACHE) {
-    lucideCache.clear();
+    lucideCache.delete(lucideCache.keys().next().value!);
   }
   lucideCache.set(cacheKey, result);
   return result;
@@ -129,7 +129,7 @@ async function findIconViaApi(topicName: string): Promise<string | null> {
 
 // ─── Component ────────────────────────────────────────────────────────
 
-export default function TopicIcon({
+const TopicIcon = memo(function TopicIcon({
   topicId,
   className,
   seedTerms,
@@ -205,4 +205,6 @@ export default function TopicIcon({
       className={[className, colorClass].filter(Boolean).join(' ')}
     />
   );
-}
+});
+
+export default TopicIcon;

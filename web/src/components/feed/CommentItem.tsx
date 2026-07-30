@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import type { ThreadComment } from '@/types';
 
 interface CommentItemProps {
@@ -12,7 +12,7 @@ interface CommentItemProps {
   upvotedUris?: Set<string>;
 }
 
-export default function CommentItem({
+const CommentItem = memo(function CommentItem({
   comment,
   onReply,
   onUpvote,
@@ -196,7 +196,9 @@ export default function CommentItem({
       </div>
     </div>
   );
-}
+});
+
+export default CommentItem;
 
 function formatTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);

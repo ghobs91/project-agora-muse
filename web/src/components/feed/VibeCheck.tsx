@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { useModerationStore } from '@/lib/store/moderation-store';
 import { analyzeSentiment } from '@/lib/llm/web-llm';
 import { isWebLLMLoaded } from '@/lib/llm/web-llm';
@@ -11,7 +11,7 @@ interface VibeCheckProps {
   onClose: () => void;
 }
 
-export default function VibeCheck({ postUri, postText, onClose }: VibeCheckProps) {
+const VibeCheck = memo(function VibeCheck({ postUri, postText, onClose }: VibeCheckProps) {
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<{
     sentiment: 'positive' | 'negative' | 'neutral';
@@ -120,4 +120,6 @@ export default function VibeCheck({ postUri, postText, onClose }: VibeCheckProps
       )}
     </div>
   );
-}
+});
+
+export default VibeCheck;

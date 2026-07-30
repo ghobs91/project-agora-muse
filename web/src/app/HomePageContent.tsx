@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Icon } from '@iconify/react';
+import dynamic from 'next/dynamic';
 import type { ReactNode } from 'react';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useTopicStore } from '@/lib/store/topic-store';
@@ -11,7 +12,15 @@ import * as auth from '@/lib/atproto/auth';
 import Header from '@/components/layout/Header';
 import Sidebar from '@/components/layout/Sidebar';
 import FeedList from '@/components/feed/FeedList';
-import OnboardingWizard, { isOnboardingComplete } from '@/components/onboarding/OnboardingWizard';
+import { isOnboardingComplete } from '@/components/onboarding/onboarding-storage';
+
+// Dynamically load the wizard so its heavy deps never enter the home page
+// module graph via a static named import (that pattern corrupts webpack
+// client chunks under HMR: "Cannot read properties of undefined (reading 'call')").
+const OnboardingWizard = dynamic(
+  () => import('@/components/onboarding/OnboardingWizard'),
+  { ssr: false },
+);
 
 export default function HomePageContent() {
   const { isAuthenticated, restoreSession, setAgent, loading: authLoading } = useAuthStore();
