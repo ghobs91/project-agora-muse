@@ -214,28 +214,51 @@ export async function detectLanguageInBatch(
 
 ${items}`;
 
+    // Reset KV cache between independent batches to prevent GPU
+    // memory exhaustion. Without this, the KV cache accumulates
+    // across sequential completions calls and fills up, causing
+    // "The KV cache is full" panics in the TVM runtime.
     try {
-      const reply = await engine.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0,
-        max_tokens: 80,
-      });
+      await engine.resetChat();
+    } catch {
+      // Non-critical — proceed even if reset fails
+    }
 
-      const content: string = reply.choices[0]?.message?.content ?? '';
-      const lines = content
-        .split('\n')
-        .map((l: string) => l.trim().toLowerCase())
-        .filter((l: string) => l.length > 0);
+    let batchFailed = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const reply = await engine.chat.completions.create({
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0,
+          max_tokens: 80,
+        });
 
-      for (let i = 0; i < batch.length; i++) {
-        const line = lines[i] ?? '';
-        // Accept explicit "no" or "non" — anything else defaults to pass (yes)
-        const isNo = line.startsWith('no') || line === 'non';
-        results[offset + i] = !isNo;
+        const content: string = reply.choices[0]?.message?.content ?? '';
+        const lines = content
+          .split('\n')
+          .map((l: string) => l.trim().toLowerCase())
+          .filter((l: string) => l.length > 0);
+
+        for (let i = 0; i < batch.length; i++) {
+          const line = lines[i] ?? '';
+          // Accept explicit "no" or "non" — anything else defaults to pass (yes)
+          const isNo = line.startsWith('no') || line === 'non';
+          results[offset + i] = !isNo;
+        }
+        batchFailed = false;
+        break; // success — exit retry loop
+      } catch (error) {
+        batchFailed = true;
+        // Reset KV cache and retry once before giving up on this batch
+        try { await engine.resetChat(); } catch { /* ignore */ }
       }
-    } catch (error) {
-      console.error('[WebLLM] Language detection failed for batch:', error);
-      // Leave results as true for this batch (pass-through)
+    }
+
+    if (batchFailed) {
+      // Stop processing further batches instead of flooding the
+      // console with repeated KV-cache-full panics
+      console.warn('[WebLLM] Language detection batch failed — stopping');
+      break;
     }
   }
 
@@ -259,7 +282,7 @@ ${description ? `Description: ${description}` : ''}
 
 Rules:
 - Terms must be specific and relevant to this exact topic
-- Keep meaningful multi-word phrases together (e.g. "open source", "machine learning")
+- Keep meaningful multi-word phrases together (e.g. "open source", "web development")
 - Avoid generic, broad terms like "technology", "software", "tech", "news", "media", "general", "culture", "discussion", "world"
 - Return ONLY a comma-separated list of lowercase terms, no other text
 - Example for "Android": "android, google pixel, aosp, apk, mobile os, android studio, smartphone, google play"

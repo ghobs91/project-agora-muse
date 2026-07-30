@@ -83,6 +83,11 @@ export async function loadModel(modelName?: string): Promise<void> {
     // Configure for browser WASM (not Node.js native)
     env.allowLocalModels = false;
     env.useBrowserCache = true;
+    // Limit ONNX WASM to a single thread so it doesn't compete with the
+    // browser's rendering/compositing thread for CPU time.
+    if (env.backends?.onnx?.wasm) {
+      env.backends.onnx.wasm.numThreads = 1;
+    }
 
     embeddingPipeline = await pipeline(
       'feature-extraction',
@@ -165,6 +170,49 @@ export async function getBatchEmbeddingsForTexts(texts: string[]): Promise<Array
   }
 }
 
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+const EMBEDDING_CHUNK_SIZE = 32;
+
+/**
+ * Chunked variant of getBatchEmbeddingsForTexts that yields to the event
+ * loop between chunks. A single 200-text ONNX call blocks the main thread
+ * for ~10s; chunking turns that continuous freeze into short bursts the
+ * browser can paint between, keeping scroll/click input responsive.
+ */
+export async function getBatchEmbeddingsChunked(
+  texts: string[],
+  chunkSize: number = EMBEDDING_CHUNK_SIZE,
+): Promise<Array<Float32Array | null>> {
+  await ensureEmbeddingModel();
+  if (!embeddingPipeline || texts.length === 0) return texts.map(() => null);
+
+  const results: Array<Float32Array | null> = new Array(texts.length).fill(null);
+
+  for (let start = 0; start < texts.length; start += chunkSize) {
+    const end = Math.min(start + chunkSize, texts.length);
+    const chunk = texts.slice(start, end);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const chunkResults: any[] = await embeddingPipeline(chunk, { pooling: 'mean', normalize: true });
+      for (let i = 0; i < chunkResults.length; i++) {
+        results[start + i] = chunkResults[i]?.data as Float32Array | null ?? null;
+      }
+    } catch {
+      // chunk failed — results remain null for these indices
+    }
+
+    if (end < texts.length) {
+      await yieldToEventLoop();
+    }
+  }
+
+  return results;
+}
+
 /**
  * Public wrapper — compute embedding for arbitrary text.
  * Returns null if the model is not loaded.
@@ -184,7 +232,9 @@ async function getSeedTermEmbedding(term: string): Promise<Float32Array | null> 
 
   const embedding = await getEmbedding(term);
   if (embedding) {
-    if (seedEmbeddingsCache.size >= MAX_SEED_EMBEDDINGS_CACHE) seedEmbeddingsCache.clear();
+    if (seedEmbeddingsCache.size >= MAX_SEED_EMBEDDINGS_CACHE) {
+      seedEmbeddingsCache.delete(seedEmbeddingsCache.keys().next().value!);
+    }
     seedEmbeddingsCache.set(term, embedding);
   }
   return embedding;
@@ -440,14 +490,14 @@ function scoreFeed(
   semanticScore: number,
   feed: FeedGenerator,
   topic: Topic,
-): number {
-  const keywordBoost = hasKeywordMatch(feed, topic) ? 1.5 : 1.0;
+): { score: number; hasKeyword: boolean } {
+  const hasKeyword = hasKeywordMatch(feed, topic);
+  const keywordBoost = hasKeyword ? 1.5 : 1.0;
   const likes = Math.max(0, feed.likeCount ?? 0);
-  // log10(1)=0, log10(10)=1, log10(100)=2, log10(1000)=3, log10(10000)=4
-  // A coefficient of 0.5 gives 10k likes a 3.0x boost so popular feeds
-  // outrank semantically-similar but obscure alternatives.
-  const popularityBoost = 1 + Math.log10(likes + 1) * 0.5;
-  return semanticScore * keywordBoost * popularityBoost;
+  // Cap the popularity boost so a very popular but semantically unrelated
+  // feed cannot dominate the results. 100+ likes gives a 1.5x boost.
+  const popularityBoost = 1 + Math.min(Math.log10(likes + 1), 2.0) * 0.25;
+  return { score: semanticScore * keywordBoost * popularityBoost, hasKeyword };
 }
 
 /**
@@ -478,16 +528,22 @@ export async function matchFeedsToTopic(
     feeds.map(async (f) => {
       const feedText = `${f.displayName}. ${f.description || ''}`;
       const feedEmbedding = await getEmbedding(feedText);
-      if (!feedEmbedding) return { feed: f, score: 0 };
+      if (!feedEmbedding) return { feed: f, score: 0, semanticScore: 0, hasKeyword: false };
 
       const semanticScore = cosineSimilarity(topicEmbedding!, feedEmbedding);
-      const score = scoreFeed(semanticScore, f, topic);
-      return { feed: f, score };
+      const { score, hasKeyword } = scoreFeed(semanticScore, f, topic);
+      return { feed: f, score, semanticScore, hasKeyword };
     }),
   );
 
   return scored
-    .filter((s) => s.score > 0.15) // Minimum relevance
+    .filter(
+      (s) =>
+        // Require a real semantic match. Keyword matches can pass with a
+        // lower floor, but purely popular-yet-unrelated feeds must not.
+        (s.hasKeyword && s.semanticScore > 0.15) ||
+        (!s.hasKeyword && s.semanticScore > 0.35),
+    )
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
     .map((s) => s.feed);
@@ -506,6 +562,7 @@ const STOP_WORDS = new Set([
   'where', 'who', 'why', 'which', 'more', 'most', 'other', 'new',
   'good', 'great', 'best', 'top', 'like', 'than', 'then', 'now',
   'here', 'there', 'one', 'two', 'as', 'if', 'so', 'by', 'from',
+  'okay', 'ok',
   'up', 'out', 'into', 'over', 'into', 'during', 'before', 'after',
   'above', 'below', 'between', 'through',
 ]);
@@ -519,6 +576,9 @@ const BROAD_CATEGORY_TERMS = new Set([
   'philosophy', 'humor', 'funny', 'comedy', 'design', 'creative',
   'writing', 'study', 'review', 'general', 'misc', 'other', 'discussion',
   'culture', 'world', 'news', 'media', 'entertainment', 'lifestyle',
+  // Avoid borrowing generic AI/ML terms for unrelated tech topics; they
+  // surface extremely popular feeds that swamp more specific matches.
+  'ai', 'artificial intelligence', 'ml', 'machine learning',
 ]);
 
 /**
@@ -538,7 +598,23 @@ export async function generateSeedTerms(
   if (isWebLLMLoaded()) {
     const llmTerms = await generateSeedTermsWithLLM(topicName, description);
     if (llmTerms && llmTerms.length > 0) {
-      return llmTerms.slice(0, 8);
+      // Filter out stop words, broad category terms, and conversational
+      // fragments that small/weak models may emit despite format instructions.
+      const filtered = llmTerms.filter((t) => {
+        if (STOP_WORDS.has(t)) return false;
+        if (BROAD_CATEGORY_TERMS.has(t)) return false;
+        // Reject multi-word fragments that are mostly stop words
+        // (e.g. "here are 5-8 specific" from a preamble sentence).
+        const words = t.split(/\s+/);
+        if (words.length >= 3) {
+          const stopCount = words.filter((w) => STOP_WORDS.has(w)).length;
+          if (stopCount / words.length >= 0.5) return false;
+        }
+        return true;
+      });
+      if (filtered.length > 0) {
+        return filtered.slice(0, 8);
+      }
     }
   }
 
