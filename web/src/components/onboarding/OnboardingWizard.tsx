@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Icon } from '@iconify/react';
 import { useTopicStore } from '@/lib/store/topic-store';
 import { useModerationStore } from '@/lib/store/moderation-store';
+import { PREDEFINED_RULES } from '@/lib/moderation/rules';
 import { setNsfwFilterEnabled } from '@/lib/nsfw/detector';
 import TopicFollowButton from '@/components/topics/TopicFollowButton';
 import { markOnboardingComplete } from '@/components/onboarding/onboarding-storage';
@@ -15,17 +16,6 @@ export {
   markOnboardingComplete,
 } from '@/components/onboarding/onboarding-storage';
 
-const SUGGESTED_FILTERS = [
-  { value: 'ragebait — posts designed to provoke outrage or anger', label: 'Ragebait' },
-  { value: 'slurs, hate speech, or derogatory language targeting any group', label: 'Slurs' },
-  { value: 'identity politics and tribal political arguments', label: 'Identity Politics' },
-  { value: 'spam, scams, or unsolicited commercial content', label: 'Spam' },
-  { value: 'crypto scams, pump-and-dump schemes, or NFT shilling', label: 'Crypto Scams' },
-  { value: 'harassment, doxxing, or targeted personal attacks', label: 'Harassment' },
-  { value: 'conspiracy theories, disinformation, or fake news', label: 'Disinformation' },
-  { value: 'excessively graphic violence or gore', label: 'Violence' },
-];
-
 interface OnboardingWizardProps {
   onComplete: () => void;
 }
@@ -33,13 +23,19 @@ interface OnboardingWizardProps {
 export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const topics = useTopicStore((s) => s.topics.filter((t) => !t.isCustom));
   const { followTopic } = useTopicStore();
-  const { addRule } = useModerationStore();
+  const { enabledRuleIds, setEnabledRules, hydrateEnabledRules } =
+    useModerationStore();
 
   const [step, setStep] = useState(1);
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedFilters, setSelectedFilters] = useState<Set<string>>(new Set());
   const [nsfwEnabled, setNsfwEnabled] = useState(false);
   const [finishing, setFinishing] = useState(false);
+
+  // Predefined toggles live in localStorage; sync any existing selection.
+  useEffect(() => {
+    hydrateEnabledRules();
+  }, [hydrateEnabledRules]);
 
   const toggleTopic = (id: string) => {
     setSelectedTopics((prev) => {
@@ -50,11 +46,11 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
     });
   };
 
-  const toggleFilter = (value: string) => {
+  const toggleFilter = (id: string) => {
     setSelectedFilters((prev) => {
       const next = new Set(prev);
-      if (next.has(value)) next.delete(value);
-      else next.add(value);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -67,15 +63,8 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
           await followTopic(topicId);
         } catch { /* skip individual failures */ }
       }
-      for (const filterValue of selectedFilters) {
-        try {
-          await addRule({
-            id: crypto.randomUUID(),
-            ruleType: 'semantic',
-            value: filterValue,
-          });
-        } catch { /* skip individual failures */ }
-      }
+      // Merge the chosen categories with any already-enabled ones.
+      setEnabledRules([...new Set([...enabledRuleIds, ...selectedFilters])]);
       setNsfwFilterEnabled(nsfwEnabled);
       markOnboardingComplete();
       onComplete();
@@ -179,13 +168,13 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
 
             <div className="px-6 pb-6">
               <div className="space-y-2">
-                {SUGGESTED_FILTERS.map((filter) => {
-                  const selected = selectedFilters.has(filter.value);
+                {PREDEFINED_RULES.map((rule) => {
+                  const selected = selectedFilters.has(rule.id);
                   return (
                     <button
-                      key={filter.value}
+                      key={rule.id}
                       type="button"
-                      onClick={() => toggleFilter(filter.value)}
+                      onClick={() => toggleFilter(rule.id)}
                       className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors border ${
                         selected
                           ? 'border-red-500/40 bg-red-500/10 text-red-300'
@@ -204,9 +193,9 @@ export default function OnboardingWizard({ onComplete }: OnboardingWizardProps) 
                         )}
                       </div>
                       <div>
-                        <div className="text-sm font-medium">{filter.label}</div>
+                        <div className="text-sm font-medium">{rule.label}</div>
                         <div className="text-xs text-text-500 mt-0.5 line-clamp-1">
-                          {filter.value}
+                          {rule.description}
                         </div>
                       </div>
                     </button>

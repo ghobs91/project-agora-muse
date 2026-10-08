@@ -7,8 +7,8 @@
  * - Phone/tablet:  Gemma 3 1B  (~0.7GB)
  * - Low-RAM phone: SmolLM2 360M (~0.4GB)
  *
- * The embedding model (all-MiniLM-L6-v2) remains loaded
- * separately for fast real-time topic matching.
+ * The EmbeddingGemma 2 embedding runtime is loaded
+ * separately (see `lib/llm/embeddings.ts`) for topic matching.
  */
 
 import type { LLMStatus } from '@/types';

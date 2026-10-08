@@ -12,9 +12,19 @@ import type {
 import { useAuthStore } from "./auth-store";
 import { useTopicStore } from "./topic-store";
 import { useTopicFeedStore } from "./topic-feed-store";
+import { useModerationStore } from "./moderation-store";
 import * as feeds from "@/lib/atproto/feeds";
 import * as records from "@/lib/atproto/records";
 import * as llm from "@/lib/llm/topic-matcher";
+import {
+  embedForClassification,
+  isEmbeddingModelLoaded,
+} from "@/lib/llm/embeddings";
+import {
+  buildPredefinedRules,
+  buildCustomRules,
+  isFlagged,
+} from "@/lib/moderation/engine";
 import {
   isNsfwFilterEnabled,
   classifyImageUrl,
@@ -149,33 +159,38 @@ async function applyModerationRules(
   posts: EnrichedPost[],
   onProgress?: (moderatedPostUris: Set<string>) => void,
 ): Promise<{ moderatedPostUris: Set<string> }> {
-  // If the embedding model isn't already loaded, skip semantic moderation
-  // entirely — loading the 23MB model + running embeddings here would spike
-  // CPU right after the feed renders, freezing the UI.
-  if (llm.getLLMStatus() !== "ready") {
+  // If the embedding runtime isn't ready yet, skip semantic moderation
+  // entirely — forcing a model load here would spike CPU right after the
+  // feed renders, freezing the UI. Failure mode is safe: nothing is hidden.
+  if (!isEmbeddingModelLoaded()) {
     return { moderatedPostUris: new Set() };
   }
 
   try {
-    const rules = await records.getModerationRules(agent);
-    const moderatedPostUris = new Set<string>();
+    // Build the active rule matrix: bundled predefined vectors (already in
+    // memory) + user-authored rules embedded once and cached.
+    useModerationStore.getState().hydrateEnabledRules();
+    const enabledRuleIds = useModerationStore.getState().enabledRuleIds;
+    const customRules = await records.getModerationRules(agent);
 
-    if (rules.length === 0) {
-      return { moderatedPostUris };
+    const activeRules = [
+      ...buildPredefinedRules(enabledRuleIds),
+      ...(await buildCustomRules(customRules)),
+    ];
+
+    if (activeRules.length === 0) {
+      return { moderatedPostUris: new Set() };
     }
 
-    // Pre-compute rule embeddings in one batched ONNX call (was N sequential)
-    const ruleEmbeddings = await llm.getBatchEmbeddingsForTexts(
-      rules.map((r) => r.value),
-    );
+    const moderatedPostUris = new Set<string>();
 
     // Embed posts in chunks, yielding to the event loop between each chunk.
-    // A single 218-text ONNX call blocks the main thread for ~10s straight;
-    // chunking turns that continuous freeze into short bursts the browser
-    // can paint between, keeping scroll/click input responsive.
+    // A single large ONNX call blocks the main thread for seconds; chunking
+    // turns that continuous freeze into short bursts the browser can paint
+    // between, keeping scroll/click input responsive.
     for (let start = 0; start < posts.length; start += MODERATION_CHUNK_SIZE) {
       const chunk = posts.slice(start, start + MODERATION_CHUNK_SIZE);
-      const chunkEmbeddings = await llm.getBatchEmbeddingsForTexts(
+      const chunkEmbeddings = await embedForClassification(
         chunk.map((p) => p.text),
       );
 
@@ -183,15 +198,9 @@ async function applyModerationRules(
       for (let i = 0; i < chunk.length; i++) {
         const postEmbedding = chunkEmbeddings[i];
         if (!postEmbedding) continue;
-        for (let j = 0; j < rules.length; j++) {
-          const ruleEmbedding = ruleEmbeddings[j];
-          if (!ruleEmbedding) continue;
-          const similarity = llm.cosineSimilarity(postEmbedding, ruleEmbedding);
-          if (similarity > 0.6) {
-            moderatedPostUris.add(chunk[i].uri);
-            addedInChunk = true;
-            break;
-          }
+        if (isFlagged(postEmbedding, activeRules)) {
+          moderatedPostUris.add(chunk[i].uri);
+          addedInChunk = true;
         }
       }
 

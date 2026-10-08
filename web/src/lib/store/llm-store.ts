@@ -49,11 +49,12 @@ const AVAILABLE_MODELS: ModelOption[] = [
     backend: 'webllm',
   },
   {
-    id: 'Xenova/all-MiniLM-L6-v2',
-    name: 'all-MiniLM-L6-v2',
-    label: 'Text matching only',
-    description: 'Tiny model that matches posts to topics by meaning. No chat features.',
-    size: '~23MB',
+    id: 'onnx-community/embeddinggemma-2-ONNX',
+    name: 'EmbeddingGemma 2',
+    label: 'Embeddings',
+    description:
+      'Zero-shot vector matching and moderation. Always loaded. No chat features.',
+    size: '~175MB',
     backend: 'embeddings',
   },
 ];

@@ -3,29 +3,18 @@
 import { useState } from 'react';
 import type { ModerationRuleRecord } from '@/types';
 import { useModerationStore } from '@/lib/store/moderation-store';
+import { PREDEFINED_RULES } from '@/lib/moderation/rules';
 
 interface ModerationRuleEditorProps {
   onClose?: () => void;
 }
 
-const SUGGESTED_FILTERS = [
-  { value: 'ragebait — posts designed to provoke outrage or anger', label: 'Ragebait' },
-  { value: 'slurs, hate speech, or derogatory language targeting any group', label: 'Slurs' },
-  { value: 'identity politics and tribal political arguments', label: 'Identity Politics' },
-  { value: 'spam, scams, or unsolicited commercial content', label: 'Spam' },
-  { value: 'crypto scams, pump-and-dump schemes, or NFT shilling', label: 'Crypto Scams' },
-  { value: 'harassment, doxxing, or targeted personal attacks', label: 'Harassment' },
-  { value: 'conspiracy theories, disinformation, or fake news', label: 'Disinformation' },
-  { value: 'excessively graphic violence or gore', label: 'Violence' },
-];
-
 export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorProps) {
-  const { rules, addRule, removeRule } = useModerationStore();
+  const { rules, enabledRuleIds, toggleRule, addRule, removeRule } =
+    useModerationStore();
 
   const [value, setValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
-
-  const alreadyAdded = (v: string) => rules.some((r) => r.value === v);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,27 +34,59 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
     }
   };
 
-  const handleAddSuggestion = async (suggestion: string) => {
-    if (alreadyAdded(suggestion)) return;
-    setSubmitting(true);
-    try {
-      await addRule({
-        id: crypto.randomUUID(),
-        ruleType: 'semantic',
-        value: suggestion,
-      });
-      onClose?.();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   return (
     <div className="space-y-4">
-      {/* Add rule form */}
+      {/* Predefined category toggles — bundled rule vectors, instant. */}
+      <div className="card">
+        <h4 className="font-medium text-base text-text-200 mb-1">
+          Filter Categories
+        </h4>
+        <p className="text-xs text-text-500 mb-3">
+          Toggle a category to hide posts that match it. Uses bundled on-device
+          vectors — switching is instant.
+        </p>
+        <ul className="space-y-1">
+          {PREDEFINED_RULES.map((rule) => {
+            const enabled = enabledRuleIds.includes(rule.id);
+            return (
+              <li
+                key={rule.id}
+                className="flex items-center justify-between py-2 border-b border-dark-700/50 last:border-0"
+              >
+                <div className="min-w-0 pr-3">
+                  <span className="text-sm text-text-300 block">
+                    {rule.label}
+                  </span>
+                  <span className="text-xs text-text-600 block truncate">
+                    {rule.description}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleRule(rule.id)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
+                    enabled ? 'bg-sky-500' : 'bg-dark-600'
+                  }`}
+                  role="switch"
+                  aria-checked={enabled}
+                  aria-label={`Toggle ${rule.label} filter`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      enabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {/* Custom rule form — embedded on-device at runtime. */}
       <form onSubmit={handleSubmit} className="card">
         <h4 className="font-medium text-base text-text-200 mb-3">
-          Add Semantic Filter
+          Add Custom Filter
         </h4>
 
         <div className="space-y-3">
@@ -77,7 +98,7 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
               type="text"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder='e.g. "ragebait" or "spam about cryptocurrency"'
+              placeholder='e.g. "spoilers about the new season"'
               className="input-dark w-full"
             />
           </div>
@@ -92,36 +113,11 @@ export default function ModerationRuleEditor({ onClose }: ModerationRuleEditorPr
         </div>
       </form>
 
-      {/* Suggested filters */}
-      {rules.length === 0 && (
-        <div className="card">
-          <h4 className="font-medium text-base text-text-200 mb-3">
-            Example Filters
-          </h4>
-          <p className="text-xs text-text-500 mb-3">
-            Click any to add it, or describe your own above.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {SUGGESTED_FILTERS.map((s) => (
-              <button
-                key={s.value}
-                type="button"
-                onClick={() => handleAddSuggestion(s.value)}
-                disabled={submitting || alreadyAdded(s.value)}
-                className="px-3 py-1.5 rounded-full text-xs font-medium bg-surface-lighter text-text-400 hover:bg-sky-600/20 hover:text-sky-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                + {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Existing rules */}
+      {/* Existing custom rules */}
       {rules.length > 0 && (
         <div className="card">
           <h4 className="font-medium text-base text-text-200 mb-3">
-            Active Filters ({rules.length})
+            Custom Filters ({rules.length})
           </h4>
           <ul className="space-y-2">
             {rules.map((rule) => (

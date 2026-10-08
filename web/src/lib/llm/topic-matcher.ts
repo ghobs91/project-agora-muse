@@ -1,223 +1,77 @@
 /**
- * In-browser LLM for topic matching and semantic moderation.
+ * In-browser topic matching and semantic scoring.
  *
- * Uses Transformers.js with a lightweight embedding model
- * (Xenova/all-MiniLM-L6-v2) to compute semantic similarity between
- * post text and topic descriptions / moderation rules.
- *
- * The model runs entirely in the browser via ONNX Runtime WASM backend.
+ * Embeddings come from the shared EmbeddingGemma 2 runtime
+ * (`lib/llm/embeddings.ts`); this module builds topic-level scoring, feed
+ * ranking, and seed-term generation on top of it.
  */
 
-import type { Topic, TopicMatch, LLMStatus, FeedGenerator } from '@/types';
+import type { Topic, TopicMatch, FeedGenerator } from '@/types';
 import { isWebLLMLoaded, generateSeedTermsWithLLM } from '@/lib/llm/web-llm';
+import { EMBEDDING_MODEL_ID } from '@/lib/llm/embedding-config';
+import {
+  getEmbeddingStatus,
+  getEmbeddingProgress,
+  onEmbeddingStatusChange,
+  loadEmbeddingModel,
+  ensureEmbeddingModel,
+  unloadEmbeddingModel,
+  isEmbeddingModelLoaded,
+  cosineSimilarity,
+  embedForSimilarity,
+  embedForSimilarityChunked,
+  embedTextForSimilarity,
+} from '@/lib/llm/embeddings';
 
-// ─── Types ────────────────────────────────────────────────────────────
+// ─── Model Management (thin re-exports for existing callers) ─────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type EmbeddingModel = any;
+export const getLLMStatus = getEmbeddingStatus;
+export const getLLMProgress = getEmbeddingProgress;
+export const onLLMStatusChange = onEmbeddingStatusChange;
+export const loadModel = loadEmbeddingModel;
+export const unloadModel = unloadEmbeddingModel;
+export { ensureEmbeddingModel, cosineSimilarity };
 
-// ─── Model Management ────────────────────────────────────────────────
-
-let currentModelName = 'Xenova/all-MiniLM-L6-v2';
-
-let embeddingPipeline: EmbeddingModel | null = null;
-let modelStatus: LLMStatus = 'unloaded';
-let modelProgress = 0;
-let statusListeners: Array<(status: LLMStatus, progress: number) => void> = [];
-
-export function getLLMStatus(): LLMStatus {
-  return modelStatus;
-}
-
-export function getLLMProgress(): number {
-  return modelProgress;
-}
-
+/** The embedding model is fixed app-wide; retained for API compatibility. */
 export function getCurrentModelName(): string {
-  return currentModelName;
+  return EMBEDDING_MODEL_ID;
 }
 
-export function setCurrentModelName(name: string): void {
-  currentModelName = name;
-}
-
-export function unloadModel(): void {
-  embeddingPipeline = null;
-  modelStatus = 'unloaded';
-  modelProgress = 0;
-  seedEmbeddingsCache.clear();
-  setStatus('unloaded', 0);
-}
-
-export function onLLMStatusChange(
-  listener: (status: LLMStatus, progress: number) => void,
-): () => void {
-  statusListeners.push(listener);
-  return () => {
-    statusListeners = statusListeners.filter((l) => l !== listener);
-  };
-}
-
-function setStatus(status: LLMStatus, progress: number = modelProgress): void {
-  modelStatus = status;
-  modelProgress = progress;
-  statusListeners.forEach((l) => l(status, progress));
-}
-
-/**
- * Load the embedding model. Call once when the app starts.
- * The model is ~23MB quantized and will be cached by the browser.
- */
-export async function loadModel(modelName?: string): Promise<void> {
-  if (modelName) {
-    currentModelName = modelName;
-  }
-  if (embeddingPipeline) return;
-  if (modelStatus === 'loading') return;
-
-  setStatus('loading', 0);
-
-  try {
-    const { pipeline, env } = await import('@xenova/transformers');
-
-    // Configure for browser WASM (not Node.js native)
-    env.allowLocalModels = false;
-    env.useBrowserCache = true;
-    // Limit ONNX WASM to a single thread so it doesn't compete with the
-    // browser's rendering/compositing thread for CPU time.
-    if (env.backends?.onnx?.wasm) {
-      env.backends.onnx.wasm.numThreads = 1;
-    }
-
-    embeddingPipeline = await pipeline(
-      'feature-extraction',
-      currentModelName,
-      {
-        progress_callback: (progress: number) => {
-          setStatus('loading', Math.round(progress * 100));
-        },
-      },
-    );
-
-    setStatus('ready', 100);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Failed to load AI model';
-    setStatus('error', 0);
-    // Allow fallback: set model to null but mark as ready for keyword matching
-    console.error('LLM model load failed, using keyword fallback:', message);
-    setStatus('ready', 100);
-  }
-}
-
-/**
- * Ensure the embedding model is loaded. Call before any embedding operation.
- * Auto-loads the model if not already loaded.
- */
-export async function ensureEmbeddingModel(): Promise<void> {
-  if (embeddingPipeline) return;
-  if (modelStatus === 'loading') return;
-  if (modelStatus === 'ready') return;
-
-  try {
-    await loadModel();
-  } catch {
-    // Silently fail — keyword matching works as fallback
-  }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function setCurrentModelName(_name: string): void {
+  /* no-op: EmbeddingGemma 2 is the single app-wide embedding model */
 }
 
 // ─── Embedding Utilities ─────────────────────────────────────────────
 
-/**
- * Compute cosine similarity between two embeddings.
- */
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-
-  if (normA === 0 || normB === 0) return 0;
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
 async function getEmbedding(text: string): Promise<Float32Array | null> {
-  await ensureEmbeddingModel();
-  if (!embeddingPipeline) return null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result: any = await embeddingPipeline([text]);
-    return result.data as Float32Array;
-  } catch {
-    return null;
-  }
+  return embedTextForSimilarity(text);
 }
 
-export async function getBatchEmbeddingsForTexts(texts: string[]): Promise<Array<Float32Array | null>> {
-  await ensureEmbeddingModel();
-  if (!embeddingPipeline || texts.length === 0) return texts.map(() => null);
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results: any[] = await embeddingPipeline(texts, { pooling: 'mean', normalize: true });
-    return results.map((r: any) => r?.data as Float32Array | null ?? null);
-  } catch {
-    return texts.map(() => null);
-  }
+export function getBatchEmbeddingsForTexts(
+  texts: string[],
+): Promise<Array<Float32Array | null>> {
+  return embedForSimilarity(texts);
 }
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-const EMBEDDING_CHUNK_SIZE = 32;
 
 /**
  * Chunked variant of getBatchEmbeddingsForTexts that yields to the event
- * loop between chunks. A single 200-text ONNX call blocks the main thread
- * for ~10s; chunking turns that continuous freeze into short bursts the
- * browser can paint between, keeping scroll/click input responsive.
+ * loop between chunks so the main thread can keep painting.
  */
-export async function getBatchEmbeddingsChunked(
+export function getBatchEmbeddingsChunked(
   texts: string[],
-  chunkSize: number = EMBEDDING_CHUNK_SIZE,
+  chunkSize = 32,
 ): Promise<Array<Float32Array | null>> {
-  await ensureEmbeddingModel();
-  if (!embeddingPipeline || texts.length === 0) return texts.map(() => null);
-
-  const results: Array<Float32Array | null> = new Array(texts.length).fill(null);
-
-  for (let start = 0; start < texts.length; start += chunkSize) {
-    const end = Math.min(start + chunkSize, texts.length);
-    const chunk = texts.slice(start, end);
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const chunkResults: any[] = await embeddingPipeline(chunk, { pooling: 'mean', normalize: true });
-      for (let i = 0; i < chunkResults.length; i++) {
-        results[start + i] = chunkResults[i]?.data as Float32Array | null ?? null;
-      }
-    } catch {
-      // chunk failed — results remain null for these indices
-    }
-
-    if (end < texts.length) {
-      await yieldToEventLoop();
-    }
-  }
-
-  return results;
+  return embedForSimilarityChunked(texts, chunkSize);
 }
 
 /**
  * Public wrapper — compute embedding for arbitrary text.
  * Returns null if the model is not loaded.
  */
-export async function getEmbeddingForText(text: string): Promise<Float32Array | null> {
+export async function getEmbeddingForText(
+  text: string,
+): Promise<Float32Array | null> {
   return getEmbedding(text);
 }
 
@@ -423,38 +277,6 @@ export async function matchPostToTopics(
     .slice(0, maxResults);
 }
 
-// ─── Semantic Moderation ─────────────────────────────────────────────
-
-/**
- * Check if a post matches a semantic moderation rule.
- * Uses the LLM to determine if the post content violates the rule.
- */
-export async function checkSemanticRule(
-  postText: string,
-  ruleDescription: string,
-): Promise<boolean> {
-  if (!embeddingPipeline) {
-    // Fallback: basic keyword matching
-    return keywordMatch(postText, ruleDescription);
-  }
-
-  const postEmbedding = await getEmbedding(postText);
-  const ruleEmbedding = await getEmbedding(ruleDescription);
-
-  if (!postEmbedding || !ruleEmbedding) {
-    return keywordMatch(postText, ruleDescription);
-  }
-
-  const similarity = cosineSimilarity(postEmbedding, ruleEmbedding);
-  return similarity > 0.6; // Threshold for semantic match
-}
-
-function keywordMatch(text: string, rule: string): boolean {
-  const lower = text.toLowerCase();
-  const words = rule.toLowerCase().split(/\s+/);
-  return words.some((word) => lower.includes(word));
-}
-
 // ─── Feed Generator Matching ─────────────────────────────────────────
 
 /**
@@ -508,7 +330,7 @@ export async function matchFeedsToTopic(
   feeds: FeedGenerator[],
   topic: Topic,
 ): Promise<FeedGenerator[]> {
-  if (!embeddingPipeline || feeds.length === 0) {
+  if (!isEmbeddingModelLoaded() || feeds.length === 0) {
     // No LLM available — do keyword matching as fallback.
     // Sort by popularity (descending) so popular feeds come first.
     const matched = feeds.filter((f) => hasKeywordMatch(f, topic));
@@ -656,7 +478,7 @@ export async function generateSeedTerms(
 
   // 4. If LLM is available, borrow relevant terms from similar default topics
   let borrowedTerms: string[] = [];
-  if (embeddingPipeline && existingTopics.length > 0) {
+  if (isEmbeddingModelLoaded() && existingTopics.length > 0) {
     const inputEmbedding = await getEmbedding(inputText);
     if (inputEmbedding) {
       const defaultTopics = existingTopics.filter((t) => !t.isCustom);
