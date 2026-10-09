@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-**Agora** is a topic-based content discovery app over Bluesky. Users follow topics instead of accounts. All AI runs in-browser: an EmbeddingGemma 2 text model (ONNX Runtime via WebGPU, WASM fallback) powers topic matching and moderation, and WebLLM/WebGPU provides optional generative features. User preferences are stored on the user's own Bluesky PDS using custom AT Protocol records (`app.agora.*` NSID). No backend server.
+**Agora** is a topic-based content discovery app over Bluesky. Users follow topics instead of accounts. All AI runs in-browser: the EmbeddingGemma 2 text model (ONNX Runtime via WebGPU, WASM fallback) powers topic matching and moderation. User preferences are stored on the user's own Bluesky PDS using custom AT Protocol records (`app.agora.*` NSID). No backend server.
 
 ## Repo Map
 
@@ -11,9 +11,10 @@ web/                         # The entire application (monorepo root)
 ├── src/app/                 # Next.js 14 App Router pages (static export)
 ├── src/components/          # React components (feed, auth, topics, moderation, layout, PWA)
 ├── src/lib/atproto/         # OAuth auth, feed fetching, PDS record CRUD, Skyfeed publishing
-├── src/lib/llm/             # EmbeddingGemma 2 embedding runtime + WebLLM model loading/inference
+├── src/lib/llm/             # EmbeddingGemma 2 embedding runtime (the only in-browser AI)
 ├── src/lib/moderation/      # Predefined rule catalog, bundle vectors, zero-shot decision engine
-├── src/lib/store/           # 8 Zustand stores (auth, topics, feed, topic-feed, LLM, moderation, compact-view, PWA)
+├── src/lib/store/           # 9 Zustand stores (auth, topics, feed, topic-feed, LLM, moderation, compact-view, PWA, debug)
+├── src/components/debug/    # Floating moderation transparency panel
 ├── src/lib/lexicon/         # Custom AT Protocol lexicon record types
 ├── src/lib/skyfeed/         # Skyfeed Builder pipeline DSL construction
 ├── src/lib/data/            # Static topic catalog + popular feed fetching
@@ -53,7 +54,7 @@ npm run verify-rule-vectors   # calibration check: neutrals pass, targets flag
 
 1. **No backend.** Static-export Next.js (`next.config.js → output: 'export'`). Everything runs in the browser.
 2. **No server-side data.** All user preferences (topic follows, moderation rules, hidden posts, custom topics) are stored as AT Protocol records on the user's PDS. Read/write via `@atproto/api` XRPC agent through the OAuth session.
-3. **Embedding + optional generative AI.** The EmbeddingGemma 2 text model (MRL-truncated to 256d, ~175MB q4) always loads for topic scoring and moderation. WebLLM models (Gemma/SmolLM2 via WebGPU) are optional and power language detection, VibeCheck sentiment, seed terms, and Skyfeed regex. Keyword matching is the fallback when models aren't ready.
+3. **Single in-browser AI model.** EmbeddingGemma 2 (MRL-truncated to 256d, ~175MB q4) is the only AI model and always loads for topic scoring and moderation. Seed-term generation and Skyfeed regex use deterministic keyword logic. The runtime falls back WebGPU → WASM; without a loaded model those features are skipped rather than degraded with a generative model.
 4. **OAuth flow.** AT Protocol OAuth with dynamic client metadata (local loopback in dev, production JSON in public/). Session persisted in `localStorage` key `agora-muse-session`.
 5. **State management.** Zustand stores. Two stores use `persist` middleware (topic-feed, compact-view, PWA-overlay). Others manually read/write `localStorage` or PDS. Stores include concurrency guards (`if (get().loading) return`).
 6. **Feed aggregation.** Round-robin interleaving of multiple feed generators + keyword/hashtag search. Posts deduplicated by URI, filtered to 24h window, moderated asynchronously via `requestIdleCallback`.
@@ -81,13 +82,13 @@ npm run verify-rule-vectors   # calibration check: neutrals pass, targets flag
 | Add a page | Look at existing pages in `web/src/app/`, follow App Router conventions |
 | Add a component | Look at `web/src/components/` for patterns, note `memo()` and `'use client'` |
 | Modify AT Protocol records | `web/src/lib/lexicon/types.ts` + `web/src/lib/atproto/records.ts` |
-| Modify AI behavior | `web/src/lib/llm/` (embedding runtime vs. WebLLM) + `web/src/lib/moderation/` |
+| Modify AI behavior | `web/src/lib/llm/` (embedding runtime) + `web/src/lib/moderation/` |
 
 ## Sharp Edges
 
 - **`.next/`, `out/`, `node_modules/`** are gitignored and are build artifacts. Never edit them.
 - **No formal test framework.** Tests are standalone `.ts` scripts run via `npx tsx`. No Jest/Vitest config.
-- **`eslint-disable` for `any`.** ~15+ locations use `@typescript-eslint/no-explicit-any` due to opaque types from `@atproto/api`, `@huggingface/transformers`, and `@mlc-ai/web-llm`. Acceptable for these library boundaries.
+- **`eslint-disable` for `any`.** ~15+ locations use `@typescript-eslint/no-explicit-any` due to opaque types from `@atproto/api` and `@huggingface/transformers`. Acceptable for these library boundaries.
 - **Manual session stub in `auth.ts`.** The `sessionManager` object manually stubs methods that `@atproto/api` expects but the browser OAuth client doesn't provide (`resumeSession`, `createAccount`, `login`). Fragile against library updates.
 - **XRPC method-existence guards.** Feed fetching checks `typeof agent.app.bsky.feed.getFeed !== 'function'` before calling — the XRPC client initialization can be race-prone.
 - **localStorage migration path.** Custom topics migrated from `localStorage` to PDS on first login after migration was deployed. The `localStorage` key is cleared after migration. Verify in `topic-store.ts` if you see unexpected behavior.
@@ -105,4 +106,4 @@ npm run verify-rule-vectors   # calibration check: neutrals pass, targets flag
 - **Do not modify `next.config.js` webpack overrides** without testing that the embedding model loads correctly in the browser.
 - **Do not rename NSID lexicons** (`app.agora.*`) — these are the record format on users' PDS and backward compatibility matters.
 - **Before adding npm dependencies:** the app must remain fully static-exportable and browser-only. No Node.js server-side APIs. No native Node modules.
-- **When changing AI model code:** the EmbeddingGemma 2 text model (~175MB q4) downloads on first use and caches via the browser HTTP cache; the tokenizer/config are much smaller. The WebLLM models use ModelCache from `@mlc-ai/web-llm`. All are sensitive to URL/path changes. The model id and prefix/dimension live in `src/lib/llm/embedding-config.ts`.
+- **When changing AI model code:** the EmbeddingGemma 2 text model (~175MB q4) downloads on first use and caches via the browser HTTP cache; the tokenizer/config are much smaller. The model id and prefix/dimension live in `src/lib/llm/embedding-config.ts`.

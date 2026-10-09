@@ -27,8 +27,7 @@ function escapeRegexTerm(term: string): string {
 }
 
 /**
- * Build a deterministic regex pattern from the topic name and seed terms
- * when the WebLLM is unavailable or its output failed validation.
+ * Build a deterministic regex pattern from the topic name and seed terms.
  *
  * Produces `\\b(term1|term2|...)\\b` with up to 10 alternations.
  */

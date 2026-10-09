@@ -8,7 +8,6 @@ import { useAuthStore } from './auth-store';
 import * as records from '@/lib/atproto/records';
 import { publishSkyfeedForTopic, unpublishSkyfeedForTopic } from '@/lib/atproto/feed-publisher';
 import { generateSeedTerms } from '@/lib/llm/topic-matcher';
-import { generateSkyfeedRegexWithLLM } from '@/lib/llm/web-llm';
 import { buildFallbackRegex } from '@/lib/skyfeed/builder';
 import { getPopularTopics } from '@/lib/data/popular-topics';
 
@@ -419,17 +418,8 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
       }).catch(() => {});
 
       try {
-        // Generate the regex with the WebLLM (already loaded for seed-term
-        // generation), falling back to a deterministic keyword pattern.
-        const llmRegex = await generateSkyfeedRegexWithLLM(
-          topic.name,
-          topic.description,
-          topic.seedTerms,
-        );
-        const regexPattern =
-          llmRegex && llmRegex.length > 0 && llmRegex.length < 500
-            ? llmRegex
-            : buildFallbackRegex(topic);
+        // Deterministic keyword pattern (no generative model).
+        const regexPattern = buildFallbackRegex(topic);
 
         const feed = await publishSkyfeedForTopic(agent, topic, regexPattern);
         if (feed) {

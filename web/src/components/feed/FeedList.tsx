@@ -12,10 +12,9 @@ import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { useFeedStore } from "@/lib/store/feed-store";
 import { useAuthStore } from "@/lib/store/auth-store";
 import { useTopicStore } from "@/lib/store/topic-store";
-import { useLLMStore } from "@/lib/store/llm-store";
 import { useCompactViewStore } from "@/lib/store/compact-view-store";
+import { useDebugStore } from "@/lib/store/debug-store";
 import * as feeds from "@/lib/atproto/feeds";
-import { isWebLLMLoaded, detectLanguageInBatch } from "@/lib/llm/web-llm";
 import PostCard from "./PostCard";
 
 /** Latin-script languages that benefit from a non-Latin script heuristic fallback */
@@ -24,7 +23,7 @@ const LATIN_LANGS = new Set(["en", "es", "pt", "de", "fr"]);
 /**
  * Quick heuristic: returns true if >25% of script-identifiable characters
  * fall outside Latin-script ranges. Used as a fallback when Bluesky's
- * `langs` field is absent and WebLLM isn't loaded. Catches CJK, Cyrillic,
+ * `langs` field is absent. Catches CJK, Cyrillic,
  * Arabic, Devanagari, Thai, Greek, Hebrew, etc.
  */
 function isNonLatinScript(text: string): boolean {
@@ -144,97 +143,18 @@ export default function FeedList() {
   const compact = useCompactViewStore((s) => s.compact);
   const setCompact = useCompactViewStore((s) => s.set);
 
-  // ─── LLM-powered language detection ────────────────────────────────
-  const llmStatus = useLLMStore((s) => s.status);
-  const [llmLangMismatchUris, setLlmLangMismatchUris] = useState<Set<string>>(
-    new Set(),
-  );
-  const llmLangProcessingRef = useRef(false);
-  const lastLangRef = useRef<string>("");
-  const checkedUrisRef = useRef<Set<string>>(new Set());
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Keep a ref synced with current lang so async callbacks can read it
-  const langRef = useRef(lang);
-  useEffect(() => {
-    langRef.current = lang;
-  });
-
-  // Run LLM language detection in background. Debounced (300ms) so rapid
-  // feed-load posts-churn doesn't flood the WebLLM with inference calls.
-  useEffect(() => {
-    if (!lang || posts.length === 0) return;
-    if (!isWebLLMLoaded()) return;
-
-    // Always sync language changes (reset state) even if we can't process right now
-    if (lastLangRef.current !== lang) {
-      lastLangRef.current = lang;
-      checkedUrisRef.current = new Set();
-      setLlmLangMismatchUris(new Set());
-    }
-
-    if (llmLangProcessingRef.current) return;
-
-    const postsToCheck = posts.filter(
-      (p) => !checkedUrisRef.current.has(p.uri),
-    );
-    if (postsToCheck.length === 0) return;
-
-    // Debounce: wait 300ms for posts to settle before firing inference
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      llmLangProcessingRef.current = true;
-      const requestedLang = lang;
-
-      detectLanguageInBatch(
-        postsToCheck.map((p) => p.text),
-        requestedLang,
-      )
-        .then((results) => {
-          if (requestedLang !== langRef.current) return;
-
-          const mismatched = new Set<string>();
-          for (let i = 0; i < postsToCheck.length; i++) {
-            checkedUrisRef.current.add(postsToCheck[i].uri);
-            if (!results[i]) {
-              mismatched.add(postsToCheck[i].uri);
-            }
-          }
-
-          setLlmLangMismatchUris((prev) => {
-            const next = new Set(prev);
-            for (const p of postsToCheck) {
-              if (mismatched.has(p.uri)) {
-                next.add(p.uri);
-              } else {
-                next.delete(p.uri);
-              }
-            }
-            return next;
-          });
-        })
-        .catch(() => {
-          // Silently fail — the langs-field filter is still active
-        })
-        .finally(() => {
-          llmLangProcessingRef.current = false;
-        });
-    }, 300);
-
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
-    };
-  }, [lang, posts, llmStatus]);
+  // ─── Language filtering ────────────────────────────────────────────
+  // Language is matched from the post's Bluesky `langs` field, plus a
+  // non-Latin-script heuristic for Latin-script target languages. Posts
+  // dropped here are reported to the moderation debug panel.
 
   // Single-pass filter: inline all checks to avoid intermediate array
   // allocations from chained .filter() calls.
-  const { visiblePosts, allVisible } = useMemo(() => {
+  const { visiblePosts, allVisible, langFilteredUris } = useMemo(() => {
     const hasLang = !!lang;
     const isLatinLang = hasLang ? LATIN_LANGS.has(lang) : false;
     const result: typeof posts = [];
+    const langFiltered = new Set<string>();
     const limit = displayCount;
     let total = 0;
 
@@ -244,23 +164,31 @@ export default function FeedList() {
         hiddenPostUris.has(p.uri) ||
         moderatedPostUris.has(p.uri) ||
         nsfwPostUris.has(p.uri) ||
-        p.matchedTopics.length === 0 ||
-        llmLangMismatchUris.has(p.uri)
+        p.matchedTopics.length === 0
       )
         continue;
 
       if (hasLang) {
         if (p.langs?.includes(lang)) {
           /* pass */
-        } else if ((p.langs?.length ?? 0) > 0) continue;
-        else if (isLatinLang && isNonLatinScript(p.text)) continue;
+        } else if ((p.langs?.length ?? 0) > 0) {
+          langFiltered.add(p.uri);
+          continue;
+        } else if (isLatinLang && isNonLatinScript(p.text)) {
+          langFiltered.add(p.uri);
+          continue;
+        }
       }
 
       total++;
       if (result.length < limit) result.push(p);
     }
 
-    return { visiblePosts: result, allVisible: total };
+    return {
+      visiblePosts: result,
+      allVisible: total,
+      langFilteredUris: langFiltered,
+    };
   }, [
     posts,
     hiddenPostUris,
@@ -268,8 +196,14 @@ export default function FeedList() {
     nsfwPostUris,
     displayCount,
     lang,
-    llmLangMismatchUris,
   ]);
+
+  // Expose language filtering to the moderation debug panel.
+  const setLanguageFilteredUris = useDebugStore((s) => s.setLanguageFilteredUris);
+  useEffect(() => {
+    setLanguageFilteredUris(langFilteredUris);
+  }, [langFilteredUris, setLanguageFilteredUris]);
+
   const hasMore = displayCount < allVisible;
 
   // Virtualized list for window scroll

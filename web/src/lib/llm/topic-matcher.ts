@@ -7,7 +7,6 @@
  */
 
 import type { Topic, TopicMatch, FeedGenerator } from '@/types';
-import { isWebLLMLoaded, generateSeedTermsWithLLM } from '@/lib/llm/web-llm';
 import { EMBEDDING_MODEL_ID } from '@/lib/llm/embedding-config';
 import {
   getEmbeddingStatus,
@@ -405,44 +404,18 @@ const BROAD_CATEGORY_TERMS = new Set([
 
 /**
  * Generate seed terms for a custom topic based on its name and description.
- * Uses semantic similarity to borrow relevant terms from default topics
- * if the LLM is available, then blends them with keyword extraction.
- * 
- * Borrowed terms are filtered to avoid overly broad category terms and
- * must be semantically related to the input topic.
+ * Blends keyword extraction with semantically similar terms borrowed from the
+ * default topics (via the embedding model), filtered to avoid overly broad
+ * category terms.
  */
 export async function generateSeedTerms(
   topicName: string,
   description: string,
   existingTopics: Topic[],
 ): Promise<string[]> {
-  // 1. Try WebLLM first for high-quality, specific seed terms
-  if (isWebLLMLoaded()) {
-    const llmTerms = await generateSeedTermsWithLLM(topicName, description);
-    if (llmTerms && llmTerms.length > 0) {
-      // Filter out stop words, broad category terms, and conversational
-      // fragments that small/weak models may emit despite format instructions.
-      const filtered = llmTerms.filter((t) => {
-        if (STOP_WORDS.has(t)) return false;
-        if (BROAD_CATEGORY_TERMS.has(t)) return false;
-        // Reject multi-word fragments that are mostly stop words
-        // (e.g. "here are 5-8 specific" from a preamble sentence).
-        const words = t.split(/\s+/);
-        if (words.length >= 3) {
-          const stopCount = words.filter((w) => STOP_WORDS.has(w)).length;
-          if (stopCount / words.length >= 0.5) return false;
-        }
-        return true;
-      });
-      if (filtered.length > 0) {
-        return filtered.slice(0, 8);
-      }
-    }
-  }
-
   const normalizedName = topicName.toLowerCase().trim();
 
-  // 2. Extract keywords from the user's input.
+  // 1. Extract keywords from the user's input.
   // Always keep the full topic name as a phrase so multi-word topics
   // (e.g. "open source") are not split into overly broad single words.
   const inputTerms: string[] = [];
@@ -476,7 +449,7 @@ export async function generateSeedTerms(
   // 3. Ensure embedding model is loaded for similarity matching
   await ensureEmbeddingModel();
 
-  // 4. If LLM is available, borrow relevant terms from similar default topics
+  // 4. Borrow relevant terms from similar default topics
   let borrowedTerms: string[] = [];
   if (isEmbeddingModelLoaded() && existingTopics.length > 0) {
     const inputEmbedding = await getEmbedding(inputText);

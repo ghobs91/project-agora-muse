@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { usePwaInstallOverlayStore } from '@/lib/store/pwa-install-overlay-store';
-import { isMobileDevice } from '@/lib/llm/web-llm';
+import { isMobileDevice } from '@/lib/utils/device';
 
 function isStandalone(): boolean {
   if (typeof window === 'undefined') return true;
