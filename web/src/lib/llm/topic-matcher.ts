@@ -471,33 +471,36 @@ export async function generateSeedTerms(
       const similar = scored
         .filter((s) => s.score > 0.45)
         .sort((a, b) => b.score - a.score)
-        .slice(0, 2);
+        .slice(0, 3);
 
+      const candidates: Array<{ term: string; score: number }> = [];
       for (const { topic } of similar) {
         for (const term of topic.seedTerms) {
           const termLower = term.toLowerCase();
 
           // Skip if already present
           if (inputTerms.includes(termLower)) continue;
-          if (borrowedTerms.includes(termLower)) continue;
-
-          // Skip overly broad category terms
           if (BROAD_CATEGORY_TERMS.has(termLower)) continue;
+          if (candidates.some((c) => c.term === termLower)) continue;
 
           // Only borrow if the term is actually semantically related to the input
           const termEmbedding = await getEmbedding(term);
           if (termEmbedding) {
             const similarity = cosineSimilarity(inputEmbedding, termEmbedding);
             if (similarity > 0.4) {
-              borrowedTerms.push(termLower);
+              candidates.push({ term: termLower, score: similarity });
             }
           }
         }
       }
+
+      // Rank borrowed terms by semantic similarity to the input topic.
+      candidates.sort((a, b) => b.score - a.score);
+      borrowedTerms = candidates.map((c) => c.term);
     }
   }
 
-  // 5. Combine: input terms first, then borrowed, deduplicate, take top 8
+  // 5. Combine: input terms first, then ranked borrowed terms, deduplicate, top 8
   const combined = [...inputTerms, ...borrowedTerms];
   return [...new Set(combined)].slice(0, 8);
 }

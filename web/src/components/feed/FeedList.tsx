@@ -16,82 +16,7 @@ import { useCompactViewStore } from "@/lib/store/compact-view-store";
 import { useDebugStore } from "@/lib/store/debug-store";
 import * as feeds from "@/lib/atproto/feeds";
 import PostCard from "./PostCard";
-
-/** Latin-script languages that benefit from a non-Latin script heuristic fallback */
-const LATIN_LANGS = new Set(["en", "es", "pt", "de", "fr"]);
-
-/**
- * Quick heuristic: returns true if >25% of script-identifiable characters
- * fall outside Latin-script ranges. Used as a fallback when Bluesky's
- * `langs` field is absent. Catches CJK, Cyrillic,
- * Arabic, Devanagari, Thai, Greek, Hebrew, etc.
- */
-function isNonLatinScript(text: string): boolean {
-  if (!text) return false;
-  let latin = 0;
-  let foreign = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    // Skip whitespace
-    if (c === 0x0020 || c === 0x0009 || c === 0x000a || c === 0x000d) continue;
-    // Skip ASCII digits
-    if (c >= 0x0030 && c <= 0x0039) continue;
-    // Skip ASCII punctuation and symbols
-    if (
-      (c >= 0x0021 && c <= 0x002f) ||
-      (c >= 0x003a && c <= 0x0040) ||
-      (c >= 0x005b && c <= 0x0060) ||
-      (c >= 0x007b && c <= 0x007e)
-    )
-      continue;
-    // Skip common Unicode punctuation ranges (General Punctuation, CJK punctuation)
-    if (
-      (c >= 0x2000 && c <= 0x206f) ||
-      (c >= 0x3000 && c <= 0x303f) ||
-      (c >= 0xff00 && c <= 0xff0f) ||
-      (c >= 0xff1a && c <= 0xff20) ||
-      (c >= 0xff3b && c <= 0xff40) ||
-      (c >= 0xff5b && c <= 0xff65)
-    )
-      continue;
-
-    // ── Latin script ranges ────────────────────────────────────
-    if (
-      (c >= 0x0041 && c <= 0x005a) || // A-Z
-      (c >= 0x0061 && c <= 0x007a) || // a-z
-      (c >= 0x00c0 && c <= 0x00ff) || // Latin-1 Supplement letters
-      (c >= 0x0100 && c <= 0x024f) || // Latin Extended-A/B
-      (c >= 0x1e00 && c <= 0x1eff) // Latin Extended Additional
-    ) {
-      latin++;
-      continue;
-    }
-
-    // ── Definitely non-Latin script ranges ─────────────────────
-    if (
-      (c >= 0x4e00 && c <= 0x9fff) || // CJK Unified Ideographs
-      (c >= 0x3400 && c <= 0x4dbf) || // CJK Extension A
-      (c >= 0x3040 && c <= 0x309f) || // Hiragana
-      (c >= 0x30a0 && c <= 0x30ff) || // Katakana
-      (c >= 0xac00 && c <= 0xd7af) || // Hangul Syllables
-      (c >= 0x0400 && c <= 0x04ff) || // Cyrillic
-      (c >= 0x0600 && c <= 0x06ff) || // Arabic
-      (c >= 0x0750 && c <= 0x077f) || // Arabic Supplement
-      (c >= 0x0900 && c <= 0x097f) || // Devanagari
-      (c >= 0x0e00 && c <= 0x0e7f) || // Thai
-      (c >= 0x0370 && c <= 0x03ff) || // Greek
-      (c >= 0x0590 && c <= 0x05ff) // Hebrew
-    ) {
-      foreign++;
-      continue;
-    }
-
-    // Everything else: emoji, symbols, math — skip (script-neutral)
-  }
-  const total = latin + foreign;
-  if (total === 0) return false;
-  return foreign / total >= 0.25;
-}
+import { detectLanguage } from "@/lib/utils/language";
 
 const LANGUAGES: { code: string; label: string }[] = [
   { code: "", label: "All languages" },
@@ -152,7 +77,6 @@ export default function FeedList() {
   // allocations from chained .filter() calls.
   const { visiblePosts, allVisible, langFilteredUris } = useMemo(() => {
     const hasLang = !!lang;
-    const isLatinLang = hasLang ? LATIN_LANGS.has(lang) : false;
     const result: typeof posts = [];
     const langFiltered = new Set<string>();
     const limit = displayCount;
@@ -174,9 +98,13 @@ export default function FeedList() {
         } else if ((p.langs?.length ?? 0) > 0) {
           langFiltered.add(p.uri);
           continue;
-        } else if (isLatinLang && isNonLatinScript(p.text)) {
-          langFiltered.add(p.uri);
-          continue;
+        } else {
+          // No `langs` field — fall back to deterministic detection.
+          const detected = detectLanguage(p.text);
+          if (detected && detected !== lang) {
+            langFiltered.add(p.uri);
+            continue;
+          }
         }
       }
 

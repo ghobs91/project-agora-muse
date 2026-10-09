@@ -19,7 +19,7 @@ web/                         # The entire application (monorepo root)
 ├── src/lib/skyfeed/         # Skyfeed Builder pipeline DSL construction
 ├── src/lib/data/            # Static topic catalog + popular feed fetching
 ├── src/lib/post/            # Post composer (image upload, link cards, embeds)
-├── src/lib/utils/           # Text utilities (hashtag extraction)
+├── src/lib/utils/           # Text, device, and language (franc) utilities
 ├── src/types/index.ts       # All TypeScript interfaces/types
 ├── public/                  # Static assets (PWA manifest, SW, icons, OAuth metadata)
 └── scripts/                 # Icon generation (Sharp) + rule-vector build/calibration (tsx)
@@ -54,7 +54,7 @@ npm run verify-rule-vectors   # calibration check: neutrals pass, targets flag
 
 1. **No backend.** Static-export Next.js (`next.config.js → output: 'export'`). Everything runs in the browser.
 2. **No server-side data.** All user preferences (topic follows, moderation rules, hidden posts, custom topics) are stored as AT Protocol records on the user's PDS. Read/write via `@atproto/api` XRPC agent through the OAuth session.
-3. **Single in-browser AI model.** EmbeddingGemma 2 (MRL-truncated to 256d, ~175MB q4) is the only AI model and always loads for topic scoring and moderation. Seed-term generation and Skyfeed regex use deterministic keyword logic. The runtime falls back WebGPU → WASM; without a loaded model those features are skipped rather than degraded with a generative model.
+3. **Single in-browser AI model.** EmbeddingGemma 2 (MRL-truncated to 256d, ~175MB q4) is the only AI model and always loads. It powers topic matching, moderation, sentiment ("Vibe check"), and seed-term selection. Language detection uses `franc-min` (deterministic, no model); the Skyfeed regex is assembled deterministically from embedding-ranked terms. The runtime falls back WebGPU → WASM; without a loaded model these features are skipped rather than degraded with a generative model.
 4. **OAuth flow.** AT Protocol OAuth with dynamic client metadata (local loopback in dev, production JSON in public/). Session persisted in `localStorage` key `agora-muse-session`.
 5. **State management.** Zustand stores. Two stores use `persist` middleware (topic-feed, compact-view, PWA-overlay). Others manually read/write `localStorage` or PDS. Stores include concurrency guards (`if (get().loading) return`).
 6. **Feed aggregation.** Round-robin interleaving of multiple feed generators + keyword/hashtag search. Posts deduplicated by URI, filtered to 24h window, moderated asynchronously via `requestIdleCallback`.
@@ -94,6 +94,7 @@ npm run verify-rule-vectors   # calibration check: neutrals pass, targets flag
 - **localStorage migration path.** Custom topics migrated from `localStorage` to PDS on first login after migration was deployed. The `localStorage` key is cleared after migration. Verify in `topic-store.ts` if you see unexpected behavior.
 - **Webpack + Transformers.js bundling.** `next.config.js` aliases `@huggingface/transformers` to its browser bundle (its `node` export pulls unresolvable onnxruntime-node wasm files), stubs `onnxruntime-node`, suppresses Node polyfills, and sets `swcMinify: false` (the SWC minifier can't parse onnxruntime-web's minified bundle; Terser handles it). Changes here break the embedding model.
 - **Bundled rule vectors.** `src/lib/moderation/rule-vectors.json` is generated offline by `scripts/build-rule-vectors.ts` and committed. If you edit a `description` in `moderation/rules.ts`, re-run `npm run build-rule-vectors` or the vectors and text will drift. Thresholds are calibrated via `scripts/verify-rule-vectors.ts`, not derived at runtime.
+- **Reworked AI features (no generative model).** Sentiment (`lib/llm/sentiment.ts`) is zero-shot nearest-anchor over EmbeddingGemma 2; language detection (`lib/utils/language.ts`) uses `franc-min` restricted to the filter's languages; the Skyfeed regex (`lib/skyfeed/builder.ts`) is assembled deterministically from embedding-ranked seed terms. Sentiment is a hint (sarcasm misfires) and language detection returns null for short/ambiguous text.
 - **Service worker.** `public/sw.js` bypasses OAuth callback path — critical for iOS PWA redirect behavior. Changes to the SW route matching must preserve this.
 - **No CI/CD in repo.** Deployed to Netlify but config managed in Netlify UI, not in-repo.
 

@@ -1,7 +1,7 @@
 /**
  * Skyfeed Builder feed-config construction.
  *
- * Given a topic and a regex pattern (LLM-generated or fallback), this
+ * Given a topic and a regex pattern (generated or fallback), this
  * module assembles a `SkyfeedBuilderConfig` block pipeline that can be
  * embedded in an `app.bsky.feed.generator` record and served by
  * `did:web:skyfeed.me`.
@@ -26,23 +26,63 @@ function escapeRegexTerm(term: string): string {
   return term.replace(REGEX_SPECIAL_CHARS, '\\$&');
 }
 
+/** Max terms (after variant expansion) in a generated regex. */
+const MAX_REGEX_TERMS = 16;
+
+/**
+ * Conservative English morphological variants for a single-word term, so the
+ * feed catches "sail / sailing / sails" from the seed term "sail". Multi-word
+ * phrases are left as-is.
+ */
+function morphologicalVariants(term: string): string[] {
+  const t = term.toLowerCase();
+  if (t.length < 4 || t.includes(' ')) return [t];
+
+  const variants = new Set<string>([t]);
+  // Already inflected — don't stack endings.
+  if (/(ing|ed|ly)$/.test(t)) return [...variants];
+
+  if (t.endsWith('e')) {
+    variants.add(`${t}s`);
+    variants.add(`${t.slice(0, -1)}ing`);
+  } else if (/[^aeiou]y$/.test(t)) {
+    variants.add(`${t.slice(0, -1)}ies`);
+  } else if (/(s|x|z|ch|sh)$/.test(t)) {
+    variants.add(`${t}es`);
+  } else {
+    variants.add(`${t}s`);
+    // Only gerund a word that ends in a consonant ("sail" → "sailing", but
+    // not "regatta" → "regattaing").
+    if (!/[aeiou]$/.test(t)) variants.add(`${t}ing`);
+  }
+  return [...variants];
+}
+
 /**
  * Build a deterministic regex pattern from the topic name and seed terms.
  *
- * Produces `\\b(term1|term2|...)\\b` with up to 10 alternations.
+ * The seed terms are already embedding-ranked (see `generateSeedTerms`); this
+ * adds morphological variants and assembles `\\b(term1|term2|...)\\b`.
  */
 export function buildFallbackRegex(topic: Topic): string {
-  const terms = [topic.name, ...topic.seedTerms]
+  const base = [topic.name, ...topic.seedTerms]
     .map((t) => t.trim().toLowerCase())
     .filter((t) => t.length > 0)
-    .filter((t, i, arr) => arr.indexOf(t) === i) // dedupe, keep order
-    .slice(0, 10)
-    .map(escapeRegexTerm);
+    .filter((t, i, arr) => arr.indexOf(t) === i);
+
+  const terms: string[] = [];
+  for (const term of base) {
+    for (const variant of morphologicalVariants(term)) {
+      if (!terms.includes(variant)) terms.push(variant);
+      if (terms.length >= MAX_REGEX_TERMS) break;
+    }
+    if (terms.length >= MAX_REGEX_TERMS) break;
+  }
 
   if (terms.length === 0) {
     return '\\b()\\b';
   }
-  return `\\b(${terms.join('|')})\\b`;
+  return `\\b(${terms.map(escapeRegexTerm).join('|')})\\b`;
 }
 
 // ─── Config Builder ──────────────────────────────────────────────────
@@ -60,7 +100,7 @@ const HN_GRAVITY = '1.8';
  * Assemble a Skyfeed Builder config for a topic given a regex pattern.
  *
  * @param topic  The topic the feed is built around.
- * @param regexPattern  A validated regex string (LLM-generated or fallback).
+ * @param regexPattern  A validated regex string (generated or fallback).
  * @returns a `SkyfeedBuilderConfig` ready to embed in a feed-generator record.
  */
 export function buildSkyfeedConfig(
