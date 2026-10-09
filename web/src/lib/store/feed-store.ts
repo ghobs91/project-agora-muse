@@ -23,8 +23,9 @@ import {
 import {
   buildPredefinedRules,
   buildCustomRules,
-  isFlagged,
+  classifyEmbedding,
 } from "@/lib/moderation/engine";
+import type { RuleMatch } from "@/lib/moderation/engine";
 import {
   isNsfwFilterEnabled,
   classifyImageUrl,
@@ -128,6 +129,8 @@ interface FeedStore {
   displayCount: number;
   moderatedPostUris: Set<string>;
   nsfwPostUris: Set<string>;
+  /** Per-post rule matches from the last moderation scan (debug/transparency). */
+  moderationMatches: Map<string, RuleMatch[]>;
 
   loadFeed: (skipLLMScoring?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
@@ -158,12 +161,14 @@ async function applyModerationRules(
   agent: any,
   posts: EnrichedPost[],
   onProgress?: (moderatedPostUris: Set<string>) => void,
-): Promise<{ moderatedPostUris: Set<string> }> {
+): Promise<{ moderatedPostUris: Set<string>; matches: Map<string, RuleMatch[]> }> {
+  const empty = { moderatedPostUris: new Set<string>(), matches: new Map() };
+
   // If the embedding runtime isn't ready yet, skip semantic moderation
   // entirely — forcing a model load here would spike CPU right after the
   // feed renders, freezing the UI. Failure mode is safe: nothing is hidden.
   if (!isEmbeddingModelLoaded()) {
-    return { moderatedPostUris: new Set() };
+    return empty;
   }
 
   try {
@@ -179,10 +184,11 @@ async function applyModerationRules(
     ];
 
     if (activeRules.length === 0) {
-      return { moderatedPostUris: new Set() };
+      return empty;
     }
 
     const moderatedPostUris = new Set<string>();
+    const matches = new Map<string, RuleMatch[]>();
 
     // Embed posts in chunks, yielding to the event loop between each chunk.
     // A single large ONNX call blocks the main thread for seconds; chunking
@@ -198,8 +204,12 @@ async function applyModerationRules(
       for (let i = 0; i < chunk.length; i++) {
         const postEmbedding = chunkEmbeddings[i];
         if (!postEmbedding) continue;
-        if (isFlagged(postEmbedding, activeRules)) {
+        // Keep the full match list (rule id/label/score/threshold) so the
+        // debug panel can explain *why* a post was filtered.
+        const postMatches = classifyEmbedding(postEmbedding, activeRules);
+        if (postMatches.length > 0) {
           moderatedPostUris.add(chunk[i].uri);
+          matches.set(chunk[i].uri, postMatches);
           addedInChunk = true;
         }
       }
@@ -216,9 +226,9 @@ async function applyModerationRules(
       }
     }
 
-    return { moderatedPostUris };
+    return { moderatedPostUris, matches };
   } catch {
-    return { moderatedPostUris: new Set() };
+    return empty;
   }
 }
 
@@ -275,6 +285,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
   upvotedPostUris: new Set(),
   moderatedPostUris: new Set(),
   nsfwPostUris: new Set(),
+  moderationMatches: new Map(),
   displayCount: 15,
 
   loadFeed: async (skipLLMScoring = false) => {
@@ -536,6 +547,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
               loading: false,
               displayCount: 15,
               nsfwPostUris: new Set(),
+              moderationMatches: new Map(),
             });
           }
         }
@@ -625,6 +637,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         loading: false,
         displayCount: 15,
         nsfwPostUris: new Set(),
+        moderationMatches: new Map(),
       });
 
       // Apply moderation rules during browser idle time so it doesn't
@@ -637,7 +650,8 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
           applyModerationRules(agent, allPosts, (progress) => {
             set({ moderatedPostUris: progress });
           })
-            .then(({ moderatedPostUris }) => {
+            .then(({ moderatedPostUris, matches }) => {
+              set({ moderationMatches: matches });
               if (moderatedPostUris.size > 0) {
                 set({ moderatedPostUris });
               }

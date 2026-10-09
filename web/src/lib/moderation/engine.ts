@@ -153,17 +153,6 @@ export function classifyEmbedding(
   return matches;
 }
 
-/** True when any active rule flags the embedding. */
-export function isFlagged(
-  embedding: Float32Array,
-  activeRules: ActiveRule[],
-): boolean {
-  for (const rule of activeRules) {
-    if (dot(embedding, rule.vector) >= rule.threshold) return true;
-  }
-  return false;
-}
-
 /** Dot product of two L2-normalised vectors == cosine similarity. */
 function dot(a: Float32Array, b: Float32Array): number {
   const len = Math.min(a.length, b.length);

@@ -4,6 +4,7 @@ import PwaRegistrator from '@/components/pwa/PwaRegistrator';
 import PwaInstallOverlay from '@/components/pwa/PwaInstallOverlay';
 import DesktopSidebar from '@/components/layout/DesktopSidebar';
 import AutoLoadLLM from '@/components/llm/AutoLoadLLM';
+import ModerationDebugPanel from '@/components/debug/ModerationDebugPanel';
 import MobileDock from '@/components/layout/MobileDock';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 
@@ -62,6 +63,7 @@ export default function RootLayout({
           <PwaRegistrator />
           <PwaInstallOverlay />
           <AutoLoadLLM />
+          <ModerationDebugPanel />
           <div className="flex">
           <DesktopSidebar />
           <div className="flex-1 min-w-0 pb-40 lg:pb-0">
